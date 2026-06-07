@@ -3,7 +3,7 @@
    起動を速く・再読み込みされても一瞬で表示・電波が弱くても画面だけは開けるようにする。
    ※ データ通信（Apps Scriptへのfetch=別オリジンのPOST）はキャッシュせず常に最新を取りに行く。
    コードを更新したら下の CACHE の数字を上げる（v1→v2…）と確実に切り替わる。 */
-const CACHE = 'mt-v1';
+const CACHE = 'mt-v2';
 const ASSETS = [
   './',
   './index.html',
