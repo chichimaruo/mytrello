@@ -5,25 +5,77 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>MT - 接続テスト</title>
   <style>
-    html, body { margin: 0; height: 100%; }
+    html, body { margin: 0; min-height: 100%; }
     body {
-      display: flex; flex-direction: column; align-items: center; justify-content: center;
       font-family: -apple-system, "Segoe UI", sans-serif;
       background: linear-gradient(135deg, #1e9bff 0%, #8b3dff 50%, #ff5ca8 100%);
-      color: #fff; text-align: center; padding: 24px; box-sizing: border-box;
+      color: #fff; padding: 24px; box-sizing: border-box;
+      display: flex; flex-direction: column; align-items: center;
     }
-    .logo {
-      font-size: 72px; font-weight: 800; letter-spacing: 2px;
-      text-shadow: 0 4px 16px rgba(0,0,0,.35); margin-bottom: 8px;
-    }
-    .msg { font-size: 18px; opacity: .95; }
-    .ok { margin-top: 20px; font-size: 15px; background: rgba(255,255,255,.2);
-          padding: 10px 18px; border-radius: 999px; }
+    .logo { font-size: 56px; font-weight: 800; letter-spacing: 2px;
+            text-shadow: 0 4px 16px rgba(0,0,0,.35); margin: 8px 0 4px; }
+    .sub { opacity: .95; margin-bottom: 20px; }
+    .card { background: rgba(255,255,255,.15); border-radius: 16px; padding: 20px;
+            width: 100%; max-width: 460px; box-sizing: border-box; backdrop-filter: blur(4px); }
+    label { display: block; font-size: 13px; margin: 12px 0 4px; opacity: .95; }
+    input { width: 100%; box-sizing: border-box; padding: 10px 12px; border: none;
+            border-radius: 10px; font-size: 14px; }
+    button { margin-top: 18px; width: 100%; padding: 13px; border: none; border-radius: 10px;
+             background: #fff; color: #8b3dff; font-weight: 700; font-size: 16px; cursor: pointer; }
+    button:active { transform: scale(.98); }
+    #result { margin-top: 16px; padding: 14px; border-radius: 10px; font-size: 14px;
+              white-space: pre-wrap; word-break: break-all; display: none; }
+    #result.ok { background: rgba(46, 204, 113, .9); display: block; }
+    #result.ng { background: rgba(231, 76, 60, .92); display: block; }
   </style>
 </head>
 <body>
   <div class="logo">MT</div>
-  <div class="msg">My Trello（アプリ版）</div>
-  <div class="ok">✅ サイトの公開に成功しました</div>
+  <div class="sub">接続テスト（フェーズ2）</div>
+
+  <div class="card">
+    <label>① Apps Script のアプリURL（/exec で終わるもの）</label>
+    <input id="url" placeholder="https://script.google.com/macros/s/...../exec">
+
+    <label>② 秘密トークン（setupApiToken で出てきた文字列）</label>
+    <input id="token" placeholder="長い英数字">
+
+    <button id="btn">接続テストを実行</button>
+    <div id="result"></div>
+  </div>
+
+  <script>
+    const $ = function (id) { return document.getElementById(id); };
+
+    // 前回入力を記憶
+    $('url').value = localStorage.getItem('apiUrl') || '';
+    $('token').value = localStorage.getItem('apiToken') || '';
+
+    $('btn').addEventListener('click', async function () {
+      const url = $('url').value.trim();
+      const token = $('token').value.trim();
+      const r = $('result');
+      if (!url || !token) { show('ng', 'URLとトークンの両方を入力してください'); return; }
+      localStorage.setItem('apiUrl', url);
+      localStorage.setItem('apiToken', token);
+      show('ok', '接続中...'); r.className = ''; r.style.display = 'block';
+      r.textContent = '接続中...';
+      try {
+        const res = await fetch(url + '?fn=apiPing&token=' + encodeURIComponent(token));
+        const data = await res.json();
+        if (data && data.ok && data.result && data.result.pong) {
+          show('ok', '✅ 接続成功！\nサーバー時刻: ' + data.result.when + '\n\nフェーズ2クリアです。このURLとトークンを次の段階でも使います。');
+        } else {
+          show('ng', '⚠ 応答はありましたが内容が想定外です:\n' + JSON.stringify(data));
+        }
+      } catch (err) {
+        show('ng', '❌ 接続できませんでした:\n' + err + '\n\n・URLが /exec で終わっているか\n・デプロイのアクセスが「全員」か\n・トークンが正しいか を確認してください');
+      }
+    });
+
+    function show(cls, msg) {
+      const r = $('result'); r.className = cls; r.textContent = msg;
+    }
+  </script>
 </body>
 </html>
