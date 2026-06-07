@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Apps Script の Stylesheet/JavaScript を PWA 用の style.css / app.js に変換し、
 アイコンも生成するビルドスクリプト。何度でも実行できる。"""
-import os, sys
+import os, sys, re, hashlib
 from PIL import Image
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -93,5 +93,16 @@ img = Image.open(src_icon).convert('RGBA')
 for name, size in [('icon-192.png', 192), ('icon-512.png', 512), ('apple-touch-icon.png', 180)]:
     img.resize((size, size), Image.LANCZOS).save(os.path.join(OUT, name))
     print(name, 'OK')
+
+# ---------- 4) service-worker のキャッシュ版数を中身のハッシュで自動更新 ----------
+# css+js の内容が変わると版数が変わり、各端末のキャッシュが自動で切り替わる。
+# 中身が同じなら版数も同じ＝無駄なキャッシュ更新は起きない。
+sw_path = os.path.join(OUT, 'service-worker.js')
+h = hashlib.sha1((css + js).encode('utf-8')).hexdigest()[:10]
+sw = read(sw_path)
+new_sw, n = re.subn(r"const CACHE = '[^']*';", "const CACHE = 'mt-%s';" % h, sw, count=1)
+assert n == 1, "service-worker.js の CACHE 行が見つからない"
+write(sw_path, new_sw)
+print('service-worker CACHE = mt-%s' % h)
 
 print('ALL DONE')
