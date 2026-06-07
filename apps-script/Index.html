@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <?!= include('Stylesheet'); ?>
+</head>
+<body>
+  <header id="topbar">
+    <span id="brand">📋</span>
+    <button id="homeBtn" class="ghost-btn">🏠 ボード一覧</button>
+    <button id="calBtn" class="ghost-btn">📅 カレンダー</button>
+    <button id="tableBtn" class="ghost-btn">📊 テーブル</button>
+    <button id="dashBtn" class="ghost-btn">📈 集計</button>
+    <button id="timelineBtn" class="ghost-btn">📐 タイムライン</button>
+    <button id="aiBtn" class="ghost-btn">✨ AI</button>
+    <button id="filterBtn" class="ghost-btn">🔍 フィルター</button>
+    <button id="setBtn" class="ghost-btn">⚙ 設定</button>
+    <button id="archBtn" class="ghost-btn">🗄 アーカイブ</button>
+    <button id="reloadBtn" class="ghost-btn" title="最新に更新">🔄</button>
+    <span id="currentBoardName" class="board-name"></span>
+    <span class="sep">｜</span>
+    <button id="addListBtn" class="ghost-btn">＋ リスト追加</button>
+    <button id="collapseAllBtn" class="ghost-btn" title="全リストを折りたたむ/展開">⊟ 全部畳む</button>
+    <span id="status"></span>
+  </header>
+
+  <div id="loadError" class="load-error hidden">
+    <span id="loadErrorMsg">読み込みに失敗しました。</span>
+    <button id="loadRetry" class="ghost-btn small">再試行</button>
+  </div>
+
+  <main id="board"></main>
+
+  <!-- ボード一覧 -->
+  <div id="boardHome" class="overlay hidden">
+    <div class="overlay-inner">
+      <div class="home-head">
+        <h2 class="overlay-title">ボード一覧</h2>
+        <button id="importBtn" class="ghost-btn small dark">⬇ Trello から取り込む</button>
+      </div>
+      <div id="boardGrid" class="board-grid"></div>
+      <div id="archivedBoards"></div>
+    </div>
+  </div>
+
+  <!-- Trello インポート -->
+  <div id="importer" class="overlay hidden">
+    <div class="overlay-inner">
+      <h2 class="overlay-title">Trello から取り込む</h2>
+      <ol class="imp-steps">
+        <li>Trello で取り込みたい<b>ボードを開く</b></li>
+        <li>右上の <b>「…」（メニューを表示）</b> → <b>「印刷、エクスポート、共有」</b> → <b>「JSON としてエクスポート」</b></li>
+        <li>開いた JSON のページで <b>Ctrl+S</b> を押して <b>.json ファイルとして保存</b></li>
+        <li>下の <b>「ファイルを選択」</b> でその .json を選び、<b>「取り込む」</b> を押す</li>
+      </ol>
+      <p class="set-note">※ 添付ファイルは Trello 側にあるため移行されません（リンクも引き継がれません）。それ以外（リスト・カード・期限・ラベル・チェックリスト・コメント・完了状態）は取り込まれます。</p>
+      <input id="impFile" type="file" accept=".json,application/json" />
+      <div class="imp-actions">
+        <button id="impRun" class="primary-btn">取り込む</button>
+        <button id="impClose" class="ghost-btn small dark">閉じる</button>
+      </div>
+      <p id="impStatus" class="set-note"></p>
+    </div>
+  </div>
+
+  <!-- カレンダー -->
+  <div id="calendar" class="overlay hidden">
+    <div class="overlay-inner">
+      <div class="cal-header">
+        <button id="calPrev" class="ghost-btn small dark">←</button>
+        <h2 id="calTitle" class="overlay-title"></h2>
+        <button id="calNext" class="ghost-btn small dark">→</button>
+        <button id="calClose" class="ghost-btn small dark cal-close">閉じる</button>
+      </div>
+      <div id="calLegend" class="cal-legend"></div>
+      <div id="calGrid" class="cal-grid"></div>
+    </div>
+  </div>
+
+  <!-- アーカイブ済みカード -->
+  <div id="archive" class="overlay hidden">
+    <div class="overlay-inner">
+      <div class="cal-header">
+        <h2 class="overlay-title">アーカイブ済みカード</h2>
+        <button id="archClose" class="ghost-btn small dark cal-close">閉じる</button>
+      </div>
+      <p class="set-note">このボードでアーカイブしたカードです。「リストに戻す」で元に戻せます。</p>
+      <div id="archList"></div>
+    </div>
+  </div>
+
+  <!-- 設定（リマインダー＋背景） -->
+  <div id="settings" class="overlay hidden">
+    <div class="overlay-inner">
+      <div class="cal-header">
+        <h2 class="overlay-title">設定</h2>
+        <button id="setClose" class="ghost-btn small dark cal-close">閉じる</button>
+      </div>
+
+      <h3 class="arch-head">⏰ 期限リマインダー（メール）</h3>
+      <p class="set-note">期限が近い／過ぎた未完了カードを、毎朝メールでお知らせします。</p>
+      <p id="reminderStatus" class="set-note"></p>
+      <div class="set-row">
+        <label>送信時刻：<select id="remHour"></select></label>
+        <button id="remEnable" class="ghost-btn small dark">毎朝の通知をオン</button>
+        <button id="remDisable" class="ghost-btn small dark">オフ</button>
+        <button id="remTest" class="ghost-btn small dark">今すぐテスト送信</button>
+      </div>
+
+      <h3 class="arch-head">🛡 自動バックアップ</h3>
+      <p class="set-note">全データ（DB）を別ファイルに自動コピーします。万一壊れても前の状態に戻せます（直近10個を保持）。</p>
+      <p id="backupStatus" class="set-note"></p>
+      <div class="set-row">
+        <label>頻度：<select id="backupFreq"><option value="daily">毎日</option><option value="weekly">毎週</option></select></label>
+        <button id="backupEnable" class="ghost-btn small dark">自動バックアップをオン</button>
+        <button id="backupDisable" class="ghost-btn small dark">オフ</button>
+        <button id="backupNowBtn" class="ghost-btn small dark">今すぐバックアップ</button>
+        <button id="backupOpen" class="ghost-btn small dark">保存先を開く</button>
+      </div>
+
+      <h3 class="arch-head">🔁 繰り返しカード（このボード）</h3>
+      <p class="set-note">毎日／毎週／毎月、自動でカードを作成します（深夜に生成）。</p>
+      <div id="recurList"></div>
+      <button id="recurAddBtn" class="ghost-btn small dark">＋ 繰り返しを追加</button>
+      <div id="recurForm" class="view-form hidden">
+        <input id="rfTitle" placeholder="カードのタイトル（例: 週次レポート）" />
+        <div class="vf-row">
+          <label>作成先リスト：<select id="rfList"></select></label>
+          <label>頻度：<select id="rfFreq">
+            <option value="daily">毎日</option>
+            <option value="weekly">毎週</option>
+            <option value="monthly">毎月</option>
+          </select></label>
+        </div>
+        <div class="rating-form-actions">
+          <button id="rfSave" class="primary-btn">追加</button>
+          <button id="rfCancel" class="ghost-btn small dark">やめる</button>
+        </div>
+      </div>
+
+      <h3 class="arch-head">🔗 読み取り専用の共有（このボード）</h3>
+      <p class="set-note">家族や同僚にボードを「見るだけ」で共有できます。下のリンクで開けます。<br>※ 他の人に開いてもらうには、デプロイのアクセスを「リンクを知っている全員」にし、共有モードを有効にしてください。</p>
+      <p id="shareStatus" class="set-note"></p>
+      <div class="set-row">
+        <button id="shareEnableBtn" class="ghost-btn small dark">共有モードを有効化</button>
+      </div>
+      <div id="shareLinkBox"></div>
+
+      <h3 class="arch-head">🤖 自動化（このボード）</h3>
+      <p class="set-note">カードを特定のリストに移動したとき、自動で完了/アーカイブ/期限設定などを実行します。</p>
+      <div id="autoList"></div>
+      <button id="autoAddBtn" class="ghost-btn small dark">＋ ルールを追加</button>
+      <div id="autoForm" class="view-form hidden">
+        <label class="fl-label">このリストに移動したら</label>
+        <select id="afTrigger"></select>
+        <label class="fl-label">実行する動作（複数可）</label>
+        <div class="auto-actions">
+          <label><input type="checkbox" id="afDone"> 完了にする</label>
+          <label><input type="checkbox" id="afArchive"> アーカイブする</label>
+          <label><input type="checkbox" id="afClearDue"> 期限を消す</label>
+          <label><input type="checkbox" id="afDue"> 期限を <input type="number" id="afDueDays" value="3" min="0" style="width:50px"> 日後にする</label>
+          <label>ラベルを付ける：<select id="afLabel"></select></label>
+        </div>
+        <div class="rating-form-actions">
+          <button id="afSave" class="primary-btn">追加</button>
+          <button id="afCancel" class="ghost-btn small dark">やめる</button>
+        </div>
+      </div>
+
+      <h3 class="arch-head">🖼 ボードの背景</h3>
+      <div class="set-row">
+        <input id="bgSearch" placeholder="画像を検索（例: mountain, 海, sky, flower）" />
+        <button id="bgSearchBtn" class="ghost-btn small dark">検索</button>
+        <button id="bgClearBtn" class="ghost-btn small dark">背景なし（標準）</button>
+      </div>
+      <p class="set-note">画像は Wikimedia Commons（自由ライセンス）から検索しています。クリックで背景に設定します。</p>
+      <div id="bgResults" class="bg-grid"></div>
+    </div>
+  </div>
+
+  <!-- AIアシスタント -->
+  <div id="ai" class="overlay hidden">
+    <div class="overlay-inner">
+      <div class="cal-header">
+        <h2 class="overlay-title">✨ AIアシスタント</h2>
+        <button id="aiClose" class="ghost-btn small dark cal-close">閉じる</button>
+      </div>
+      <div id="aiKeyBox"></div>
+
+      <h3 class="arch-head">自然文でカード追加</h3>
+      <p class="set-note">例：「来週金曜までに請求書を送る」「6/20-22 出張」など。AIが日付を読み取ってカード化します。</p>
+      <div class="set-row"><label>追加先：<select id="aiList"></select></label></div>
+      <textarea id="aiText" rows="2" class="field-input" style="width:100%;margin-top:6px" placeholder="やることを文章で入力..."></textarea>
+      <div class="imp-actions"><button id="aiAddBtn" class="primary-btn">AIでカード追加</button></div>
+      <p id="aiAddResult" class="set-note"></p>
+
+      <h3 class="arch-head">このボードを要約</h3>
+      <div class="imp-actions"><button id="aiSumBtn" class="ghost-btn small dark">要約する</button></div>
+      <div id="aiSumResult" class="ai-result"></div>
+    </div>
+  </div>
+
+  <!-- タイムライン -->
+  <div id="timeline" class="overlay hidden">
+    <div class="overlay-inner">
+      <div class="cal-header">
+        <button id="tlPrev" class="ghost-btn small dark">←</button>
+        <h2 id="tlTitle" class="overlay-title"></h2>
+        <button id="tlNext" class="ghost-btn small dark">→</button>
+        <button id="tlClose" class="ghost-btn small dark cal-close">閉じる</button>
+      </div>
+      <div id="tlBody" class="tl-body"></div>
+    </div>
+  </div>
+
+  <!-- 集計ダッシュボード -->
+  <div id="dashboard" class="overlay hidden">
+    <div class="overlay-inner">
+      <div class="cal-header">
+        <h2 class="overlay-title">集計ダッシュボード</h2>
+        <button id="dashClose" class="ghost-btn small dark cal-close">閉じる</button>
+      </div>
+      <div id="dashBody" class="dash-body"></div>
+    </div>
+  </div>
+
+  <!-- テーブル（保存ビュー） -->
+  <div id="table" class="overlay hidden">
+    <div class="overlay-inner table-inner">
+      <div class="cal-header">
+        <h2 class="overlay-title">テーブル</h2>
+        <button id="tableClose" class="ghost-btn small dark cal-close">閉じる</button>
+      </div>
+      <div id="viewTabs" class="view-tabs"></div>
+      <div class="view-toolbar">
+        <button id="viewEdit" class="ghost-btn small dark">⚙ このテーブルを編集</button>
+        <button id="viewDelete" class="ghost-btn small dark">🗑 削除</button>
+        <span id="viewCount" class="set-note"></span>
+      </div>
+      <div id="viewForm" class="view-form hidden">
+        <input id="vfName" placeholder="テーブル名（例: 今日やること）" />
+        <div class="vf-row">
+          <label>期限：<select id="vfDue">
+            <option value="">すべて</option>
+            <option value="todo">今日まで（期限切れ＋今日）</option>
+            <option value="overdue">期限切れ</option>
+            <option value="today">今日</option>
+            <option value="soon">3日以内</option>
+            <option value="has">期限あり</option>
+            <option value="none">期限なし</option>
+          </select></label>
+          <label>状態：<select id="vfDone">
+            <option value="">すべて</option>
+            <option value="undone">未完了のみ</option>
+            <option value="done">完了のみ</option>
+          </select></label>
+          <label>並べ替え：<select id="vfSort">
+            <option value="due">期限が近い順</option>
+            <option value="board">ボード順</option>
+            <option value="name">カード名順</option>
+          </select></label>
+        </div>
+        <label class="fl-label">対象ボード（チェックなし＝すべてのボード）</label>
+        <div id="vfBoards" class="vf-boards"></div>
+        <div class="rating-form-actions">
+          <button id="vfSave" class="primary-btn">保存</button>
+          <button id="vfCancel" class="ghost-btn small dark">キャンセル</button>
+        </div>
+      </div>
+      <div id="tableWrap" class="table-wrap"></div>
+    </div>
+  </div>
+
+  <!-- 検索・フィルター -->
+  <div id="filter" class="overlay hidden">
+    <div class="overlay-inner">
+      <div class="cal-header">
+        <h2 class="overlay-title">検索・フィルター</h2>
+        <button id="filterClose" class="ghost-btn small dark cal-close">閉じる</button>
+      </div>
+      <div class="filter-body">
+        <label class="fl-label">キーワード（カード名・説明）</label>
+        <input id="flKeyword" class="field-input" placeholder="例: コーヒー" />
+
+        <label class="fl-label">ラベル</label>
+        <div id="flLabels" class="fl-labels"></div>
+
+        <label class="fl-label">期限</label>
+        <select id="flDue">
+          <option value="">指定なし</option>
+          <option value="overdue">期限切れ</option>
+          <option value="today">今日が期限</option>
+          <option value="soon">3日以内</option>
+          <option value="has">期限あり</option>
+          <option value="none">期限なし</option>
+        </select>
+
+        <label class="fl-label">状態</label>
+        <select id="flDone">
+          <option value="">すべて</option>
+          <option value="undone">未完了のみ</option>
+          <option value="done">完了のみ</option>
+        </select>
+
+        <div class="imp-actions">
+          <button id="flApply" class="primary-btn">適用</button>
+          <button id="flClear" class="ghost-btn small dark">クリア</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- カード編集モーダル -->
+  <div id="modal" class="modal-overlay hidden">
+    <div class="modal">
+      <button id="modalClose" class="modal-close">✕</button>
+      <div class="m-title-row">
+        <button id="m-done" class="done-btn">完了にする</button>
+        <input id="m-title" class="m-title-input" />
+      </div>
+
+      <div class="modal-body">
+        <!-- 左：本体 -->
+        <div class="modal-main">
+          <div class="m-section">
+            <label class="m-label">カバー</label>
+            <div id="m-cover"></div>
+          </div>
+
+          <div class="m-section">
+            <label class="m-label">ラベル</label>
+            <div id="m-labels" class="m-labels"></div>
+            <button id="m-label-add-btn" class="ghost-btn small dark">＋ ラベルを追加</button>
+            <div id="m-label-form" class="label-form hidden">
+              <input id="m-label-name" placeholder="ラベル名（例: 買い出し）" />
+              <div id="m-label-colors" class="label-colors"></div>
+              <label class="label-custom">その他の色：<input id="m-label-color" type="color" value="#0079bf" /></label>
+              <div class="label-form-actions">
+                <button id="m-label-save" class="primary-btn">追加</button>
+                <button id="m-label-cancel" class="ghost-btn small dark">キャンセル</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="m-section">
+            <label class="m-label">カスタムフィールド</label>
+            <div id="m-fields"></div>
+            <button id="m-field-add-btn" class="ghost-btn small dark">＋ フィールドを追加</button>
+            <div id="m-field-form" class="rating-form hidden">
+              <input id="m-field-name" placeholder="フィールド名（例: 産地 / 価格 / 焙煎度）" />
+              <div class="rating-form-row">
+                <select id="m-field-type">
+                  <option value="text">テキスト</option>
+                  <option value="number">数値</option>
+                  <option value="checkbox">チェックボックス</option>
+                  <option value="date">日付</option>
+                  <option value="select">ドロップダウン</option>
+                  <option value="rating">評価（☆/Lv）</option>
+                </select>
+                <label class="field-front"><input id="m-field-front" type="checkbox" checked /> カードに表示</label>
+              </div>
+              <div id="m-field-config"></div>
+              <div class="rating-form-actions">
+                <button id="m-field-save" class="primary-btn">追加</button>
+                <button id="m-field-cancel" class="ghost-btn small dark">キャンセル</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="m-section">
+            <label class="m-label">日付</label>
+            <div class="date-row">
+              <label class="date-cell">スタート<input id="m-start" type="date" /></label>
+              <label class="date-cell">終わり<input id="m-end" type="date" /></label>
+            </div>
+            <label class="allday"><input id="m-allday" type="checkbox" /> 終日</label>
+            <button id="m-date-clear" class="ghost-btn small dark">日付をクリア</button>
+          </div>
+
+          <div class="m-section">
+            <label class="m-label">説明</label>
+            <textarea id="m-desc" rows="4" placeholder="詳細メモ..."></textarea>
+          </div>
+
+          <div class="m-section">
+            <label class="m-label">📎 添付ファイル</label>
+            <div id="m-attachments" class="m-attachments"></div>
+            <input id="m-file" type="file" hidden />
+            <button id="m-file-btn" class="ghost-btn small dark">＋ ファイルを添付</button>
+          </div>
+
+          <div class="m-section">
+            <label class="m-label">📅 Google連携</label>
+            <label class="g-sync"><input type="checkbox" id="m-gcal"> Googleカレンダーに登録（日付が必要）</label>
+            <label class="g-sync"><input type="checkbox" id="m-gtask"> Googleタスクに登録</label>
+            <p id="m-sync-status" class="set-note"></p>
+          </div>
+
+          <div class="m-section">
+            <label class="m-label">🔗 リンク・YouTube</label>
+            <div id="m-links"></div>
+            <div class="add-inline">
+              <input id="m-link-new" placeholder="URLを貼り付け（YouTubeはその場で再生）" />
+              <button id="m-link-add" class="ghost-btn small dark">追加</button>
+            </div>
+          </div>
+
+          <div class="m-section">
+            <label class="m-label">🗺 地図・場所</label>
+            <div id="m-places"></div>
+            <div class="add-inline">
+              <input id="m-place-new" placeholder="住所や店名で検索（例: 東京駅、〇〇カフェ）" />
+              <button id="m-place-add" class="ghost-btn small dark">追加</button>
+            </div>
+          </div>
+
+          <div class="m-section">
+            <label class="m-label">チェックリスト <span id="m-check-progress"></span></label>
+            <div id="m-checklist"></div>
+            <div class="add-inline">
+              <input id="m-check-new" placeholder="項目を追加（Excelの列を貼り付けで一括追加）" />
+              <button id="m-check-add" class="ghost-btn small dark">追加</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 右：コメント -->
+        <div class="modal-side">
+          <div class="m-section">
+            <label class="m-label">💬 コメントとアクティビティ</label>
+            <div class="add-inline">
+              <input id="m-comment-new" placeholder="コメントを追加..." />
+              <button id="m-comment-add" class="ghost-btn small dark">送信</button>
+            </div>
+            <div id="m-comments"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="m-footer">
+        <button id="m-copy" class="ghost-btn small dark">📋 複製</button>
+        <button id="m-template" class="ghost-btn small dark">📋 テンプレートにする</button>
+        <button id="m-move" class="ghost-btn small dark">➡ 移動</button>
+        <button id="m-archive" class="ghost-btn small dark">📥 アーカイブ</button>
+        <button id="m-delete" class="danger-btn">カードを削除</button>
+        <div id="m-move-panel" class="move-panel hidden">
+          <select id="m-move-board"></select>
+          <select id="m-move-list"></select>
+          <button id="m-move-go" class="primary-btn">ここへ移動</button>
+          <button id="m-move-cancel" class="ghost-btn small dark">やめる</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+  <?!= include('JavaScript'); ?>
+</body>
+</html>
