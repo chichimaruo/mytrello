@@ -696,7 +696,8 @@ function renderList(list) {
     const w = el('div', 'list collapsed');
     w.dataset.listId = list.id;
     w.title = list.title + '（クリックで展開）';
-    w.appendChild(el('div', 'collapsed-count', String(cardsOfList(list.id).length)));
+    // フィルター適用時は該当カードの枚数を表示（未適用時は matchesFilter が全件trueなので総数になる）
+    w.appendChild(el('div', 'collapsed-count', String(cardsOfList(list.id).filter(matchesFilter).length)));
     w.appendChild(el('div', 'collapsed-title', esc(list.title)));
     w.addEventListener('click', function () { toggleCollapse(list, false); });
     return w;
