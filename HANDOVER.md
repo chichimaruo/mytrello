@@ -220,6 +220,17 @@ UIは画面下部の各 `#overlay`（boardHome, calendar, table, dashboard, time
 - **スコープ**: spreadsheets, drive, script.external_request（UrlFetch=Gemini/Wikimedia/Drive REST), script.send_mail（MailApp=リマインダー）, script.scriptapp（トリガー）, calendar（CalendarApp）, tasks（Tasks高度サービス）。
 - **appsscript.json**: `enabledAdvancedServices`に **Tasks v1** を宣言（Googleタスク連携に必須）。
 - **時刻トリガー（3種）**: `sendDueReminders`（毎朝・任意時刻）, `runRecurring`（毎日1時）, `backupNow`（毎日/毎週2時）。いずれもUIのオン/オフで作成・削除。
+
+> **★トリガーは「作ったつもり」で存在しないことがある。定期的に実物を見ること。**
+> 一覧はここ → script.google.com で My Trello を開く → 左サイドバーの **⏰ マイトリガー**
+>
+> - **2026-08-09 時点の実態＝`backupNow` の1個だけ**だった。`sendDueReminders`（期限リマインダーのメール）と
+>   `runRecurring`（繰り返しカード）は**未登録＝機能として動いていなかった**。実装はあるのに誰も気づいていない状態。
+>   → 使うならアプリの ⚙設定 からオンにする。
+> - **トリガーは「導入」列のバージョンに紐づいて実行される**（実物は `バージョン 40`）。
+>   つまり `clasp push`（＝HEADの更新）だけでは**トリガーの挙動は変わらない**。
+>   `backupNow` / `sendDueReminders` / `runRecurring` を直したときは、**必ず新バージョンをデプロイ**すること（§2-B/2-B'）。
+>   これを忘れると「コードは直したのに夜のバッチだけ古い動きのまま」という切り分けの難しい状態になる。
 - **AI**: Google AI Studio（aistudio.google.com）で無料のGemini APIキーを取得し、アプリの「✨AI」→キー登録（PROP `GEMINI_KEY`に保存・サーバー側のみ）。
 
 ---
@@ -235,9 +246,11 @@ UIは画面下部の各 `#overlay`（boardHome, calendar, table, dashboard, time
 ## 10. バックアップ / 復旧
 - **バックアップ**: ⚙設定→自動バックアップをオン（毎日推奨）。`backupNow`が「My Trello Backups」フォルダにDBを日付名コピー（直近10個保持）。
 
-> **★2026-08-08に判明：自動バックアップが止まっていた。**
+> **★2026-08-08に判明：自動バックアップが止まっていた → 2026-08-09 に復旧済み。**
 > `My Trello Backups` に **2026-06-05 の1個しか無かった**（正常なら直近10個ある）。
 > 6/5に手動で `backupNow` を1回押しただけで、その後2か月ぶん退避が無い状態だった。
+> 8/9に自動バックアップ（毎日2時）をオンにし、「今すぐバックアップ」で
+> `MyTrelloDB_backup_2026-08-09_0840` を作成して穴を埋め、処理が正常動作することも確認済み。
 > **オンにしても誰も見ていないと静かに死ぬ**ので、`_publish.ps1` の冒頭に鮮度チェックを入れてある
 > （最新が7日より古いと赤字で警告）。開発のたびに通るので気づける。
 >
