@@ -1,4 +1,4 @@
-# =============================================================
+﻿# =============================================================
 #  My Trello - アプリ版(PWA)を公開する
 #  使い方: このファイルを右クリック →「PowerShell で実行」
 #          または PowerShell で  .\_publish.ps1
@@ -36,7 +36,7 @@ try { python _build_pwa.py } finally { Pop-Location }
 Step 'リポジトリへコピー'
 git -C $Repo pull --ff-only
 
-$files = @('README.md', 'SETUP.md', 'HANDOVER.md', '_build_pwa.py', '_publish.ps1', 'myboard-icon.png')
+$files = @('README.md', 'SETUP.md', 'HANDOVER.md', '_build_pwa.py', '_publish.ps1', '_push_gas.ps1', 'myboard-icon.png')
 foreach ($f in $files) {
   $p = Join-Path $Src $f
   if (Test-Path $p) { Copy-Item $p (Join-Path $Repo $f) -Force }

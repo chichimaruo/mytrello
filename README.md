@@ -14,6 +14,7 @@ Trello の代わりに自作した、自分専用のかんばんアプリ。
 | `webapp/` | `apps-script/` から**自動生成**される公開用ファイル。手で編集しない |
 | `_build_pwa.py` | `apps-script/` → `webapp/` の変換ビルド |
 | `_publish.ps1` | ビルドして GitHub へ公開するスクリプト（Windows 用） |
+| `_push_gas.ps1` | Apps Script 側へ clasp で反映するスクリプト（任意・初回準備あり） |
 | `.github/workflows/deploy.yml` | push すると GitHub Pages へ自動公開 |
 | `SETUP.md` | 初回セットアップ手順 |
 | `HANDOVER.md` | **開発を再開するとき最初に読む引き継ぎ資料** |

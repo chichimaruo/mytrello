@@ -77,6 +77,29 @@ Gitはドライブ同期と相性が悪いので**ドライブの外**に置く�
 5. **appsscript.json を編集**するには、Apps Scriptの歯車「プロジェクトの設定」→「`appsscript.json` をエディタで表示」にチェック。
 6. **スコープが増えた回**は、デプロイ/初回操作で**権限の再承認**が出る → 「許可」（「確認されていません」は自作アプリなので 詳細→移動→許可）。
 
+### 2-B'. （任意）コピペをやめる ＝ `_push_gas.ps1`
+`clasp`（Google公式のコマンドツール）を使うと、2-B の「全選択→削除→貼付」を **コマンド1発**に置き換えられる。
+貼り間違い事故（§11-9）が原理的に起きなくなるのが利点。**初回だけ準備が必要**：
+
+```
+npm install -g @google/clasp      … 導入（Node 22以上が必要。確認済み: v22.17.1）
+clasp login                       … ブラウザが開くので自分のGoogleアカウントを許可
+```
+さらに https://script.google.com/home/usersettings で **「Google Apps Script API」をオン**（1回だけ）。
+
+> **★初回だけ必ずやる安全確認**：`clasp push` は**このフォルダの中身でサーバー側を上書き**する。
+> Apps Scriptのエディタで直接いじって、こちらに写していない変更があると**消える**。
+> 先に別フォルダへ落として見比べること：
+> ```
+> mkdir C:\temp\gas-check ; cd C:\temp\gas-check
+> clasp clone-script <スクリプトID>
+> ```
+> 落ちてきた `Code.gs` 等が `apps-script/` と同じなら安心して使ってよい。
+
+準備ができたら `_push_gas.ps1` を実行するだけ（scriptIdは初回に聞かれ `.clasp.json` に保存。このファイルは公開リポジトリには載せない）。
+中で `clasp push --force` → `clasp update-deployment <デプロイID>`（URLは変わらない）まで行う。
+**clasp v3 はコマンド名が v2 から変わっている**点に注意（`deploy -i` → `update-deployment`、`clone` → `clone-script`）。
+
 ### 2-C. アプリ版（PWA）の反映 ＝ `_publish.ps1` を実行するだけ
 `My Trello Project\_publish.ps1` を右クリック →「PowerShell で実行」。中でやっていること：
 1. `python _build_pwa.py` … `apps-script/` から `webapp/` を作り直す（Pillowが必要: `pip install Pillow`）
@@ -221,7 +244,13 @@ UIは画面下部の各 `#overlay`（boardHome, calendar, table, dashboard, time
     アプリ版に入らない、という静かな事故になりやすかったため、**2026-08-08 にビルド生成へ変更**（§2-C）。**webapp/ は絶対に手で編集しない**。
 11. **Gitをドライブの中に置かない**：`H:\マイドライブ\...` 直下の `.git` は同期で中身が消えて空になっていた。
     作業用リポジトリは **`C:\Users\cruis\repos\mytrello`（ドライブ外）**。ドライブが正本、リポジトリは公開用のコピー、という関係。
-12. **アプリ版で「読み込みに失敗しました」**：たいてい ①Apps Scriptを再デプロイして**新バージョンにしていない** ②デプロイのアクセスが
+12. **`.ps1` は BOM付きUTF-8 で保存する**：Windows PowerShell 5.1 は BOM が無い `.ps1` を cp932 として読むため、
+    日本語コメントが化けて**構文エラーで起動すらしない**。`_publish.ps1` / `_push_gas.ps1` を編集したら保存形式に注意。
+    確認方法（エラーが出なければOK）:
+    ```
+    $e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile('_publish.ps1',[ref]$null,[ref]$e); $e
+    ```
+13. **アプリ版で「読み込みに失敗しました」**：たいてい ①Apps Scriptを再デプロイして**新バージョンにしていない** ②デプロイのアクセスが
     「自分のみ」に戻っている ③トークン不一致、のどれか。⚙設定 →「🔌接続設定」で URL とトークンを入れ直せば直る。
 
 ---
