@@ -1,6 +1,9 @@
 ﻿# =============================================================
 #  My Trello - Apps Script 側をコマンドで反映する（コピペの代わり）
-#  使い方: 右クリック →「PowerShell で実行」／ または  .\_push_gas.ps1
+#  使い方: ★ 同じフォルダの  _push_gas.cmd  をダブルクリック ★
+#          （.ps1 を直接ダブルクリックすると、Googleドライブが付ける
+#            「インターネット由来」の印 + 実行ポリシー RemoteSigned のせいで
+#            黒い画面が一瞬出て消えるだけになる。.cmd はそれを回避する）
 #
 #  これは §2-B（script.google.com に4ファイルを貼り付ける作業）の自動化です。
 #  アプリ版(PWA)の公開は別スクリプト  _publish.ps1  の方。
@@ -30,7 +33,9 @@
 #     → 落ちてきた Code.gs 等が apps-script/ と同じなら安心して進められます。
 # =============================================================
 
-$ErrorActionPreference = 'Stop'
+# 'Stop' にはしないこと。clasp/node は進捗を標準エラーへ書くことがあり、
+# PowerShell 5.1 はそれを致命的エラー扱いしてスクリプトを即死させる。
+$ErrorActionPreference = 'Continue'
 $Src = $PSScriptRoot
 
 function Step($msg) { Write-Host "`n=== $msg ===" -ForegroundColor Cyan }

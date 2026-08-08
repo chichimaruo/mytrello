@@ -7,7 +7,7 @@
 
 > **最初に3行だけ**
 > 1. 触るのは `apps-script/` の4ファイルだけ。`webapp/` は自動生成なので手で編集しない。
-> 2. 反映は2か所必要 → **Apps Script（コピペ＋新バージョンでデプロイ）** と **アプリ版（`_publish.ps1`）**。
+> 2. 反映は2か所必要 → **Apps Script（`_push_gas.cmd`）** と **アプリ版（`_publish.cmd`）**。どちらもダブルクリック。
 > 3. 列やシートを足すときは §4（スキーマ移行）を必ず読む。ここが唯一の事故ポイント。
 
 ---
@@ -30,7 +30,10 @@ My Trello Project/            ← 正本（Googleドライブ）
 ├─ SETUP.md           ← 初回セットアップ手順（デプロイ方法）
 ├─ README.md          ← 公開リポジトリの表紙
 ├─ _build_pwa.py      ← apps-script/ → webapp/ へ変換するビルド
-├─ _publish.ps1       ← ビルド＋GitHubへ公開（これを実行するだけ）
+├─ _publish.cmd       ← ★ビルド＋GitHubへ公開（ダブルクリック）
+├─ _push_gas.cmd      ← ★Apps Scriptへ反映（ダブルクリック）
+├─ _publish.ps1       ← 上の .cmd が呼ぶ中身（直接ダブルクリックしない・§11-13）
+├─ _push_gas.ps1      ← 同上
 ├─ myboard-icon.png   ← アイコンの元画像（ここからPWAアイコンを生成）
 ├─ apps-script/       ← ★ソース一式。編集するのはここだけ
 │  ├─ Code.gs         ← サーバー側（全ロジック・DB操作・外部連携・JSON API）
@@ -101,7 +104,8 @@ Gitはドライブ同期と相性が悪いので**ドライブの外**に置く�
 > 落ちてきたファイルが `apps-script/` と同じなら安心して使ってよい。
 > **実際、2026-08-08 の初回確認でサーバーとドライブの食い違いが3ファイル見つかった**（§11-12）。形だけの手順ではない。
 
-あとは `_push_gas.ps1` を実行するだけ（scriptIdは初回に聞かれ `.clasp.json` に保存。このファイルは公開リポジトリには載せない）。
+あとは **`_push_gas.cmd` をダブルクリックするだけ**（scriptIdは初回に聞かれ `.clasp.json` に保存。このファイルは公開リポジトリには載せない）。
+聞かれるのは2回だけ：①上書き確認（`yes` と入力）②差し替えるデプロイID（`@HEAD` ではない方。空Enterでスキップ）。
 中では `clasp show-file-status`（送る中身の確認）→ `clasp push --force` → `clasp list-deployments` →
 `clasp update-deployment <デプロイID>`（新バージョンへ差し替え・**URLは変わらない**）の順で実行する。
 
@@ -109,8 +113,8 @@ Gitはドライブ同期と相性が悪いので**ドライブの外**に置く�
 `deployments` → `list-deployments`、`status` → `show-file-status`）。旧v2向けの記事をそのまま真似すると動かない。
 上記コマンド名・オプションは clasp 3.3.0 の `--help` で実在を確認済み。
 
-### 2-C. アプリ版（PWA）の反映 ＝ `_publish.ps1` を実行するだけ
-`My Trello Project\_publish.ps1` を右クリック →「PowerShell で実行」。中でやっていること：
+### 2-C. アプリ版（PWA）の反映 ＝ `_publish.cmd` をダブルクリックするだけ
+`My Trello Project\_publish.cmd` をダブルクリック。中でやっていること：
 1. `python _build_pwa.py` … `apps-script/` から `webapp/` を作り直す（Pillowが必要: `pip install Pillow`）
 2. ドライブの中身を作業用リポジトリへコピー（リポジトリが無ければ自動でclone）
 3. 確認プロンプトのあと commit & push → GitHub Actions が Pages へ自動公開（1〜2分）
@@ -289,15 +293,27 @@ UIは画面下部の各 `#overlay`（boardHome, calendar, table, dashboard, time
       サーバー側は `ANYONE_ANONYMOUS`。気づかず push→デプロイしていたらアプリが死んでいた。**ドライブ側を修正済み**。
     - 公開範囲を広げても危なくない理由：データは `handleApi_` のトークン照合（`API_TOKEN`）で守られており、
       素のURLで来た他人には `doGet` のガードで案内文しか出ない。
-13. **`.ps1` は BOM付きUTF-8 で保存する**：Windows PowerShell 5.1 は BOM が無い `.ps1` を cp932 として読むため、
+13. **★スクリプトは `.cmd` から起動する（`.ps1` を直接ダブルクリックしない）**：
+    Googleドライブは同期ファイルに「インターネット由来」の印（`Zone.Identifier` / `ZoneId=3`）を付ける。
+    このPCの実行ポリシーは `RemoteSigned` なので、印の付いた未署名スクリプトは**実行を拒否され、
+    黒い画面が一瞬出て消えるだけ**になる（2026-08-09に実際に発生）。
+    - `Unblock-File` で消せるが、**ドライブが再同期すると印は戻る**ので恒久策にならない。
+    - そこで `_publish.cmd` / `_push_gas.cmd` を用意した。中で `-ExecutionPolicy Bypass` で起動し、
+      末尾の `pause` でエラー時も画面が残る。**必ずこちらを使う**。
+    - 印が付いているかの確認: `Get-Content <file> -Stream Zone.Identifier`（「見つからない」エラー＝印なし）
+14. **`.ps1` の中で `$ErrorActionPreference = 'Stop'` にしない**：`git` や `clasp` は進捗を標準エラーに書くことがあり、
+    PowerShell 5.1 はそれを**致命的エラー扱いしてスクリプトを即死**させる（`git push` で特に起きる）。
+    `'Continue'` にして、`Assert-Ok`（`$LASTEXITCODE` 判定）で明示的に確認する方式にしてある。
+15. **`.ps1` は BOM付きUTF-8 で保存する**：Windows PowerShell 5.1 は BOM が無い `.ps1` を cp932 として読むため、
     日本語コメントが化けて**構文エラーで起動すらしない**。`_publish.ps1` / `_push_gas.ps1` を編集したら保存形式に注意。
+    （`.cmd` の方は BOM を付けない。先頭で `chcp 65001` している）
     確認方法（エラーが出なければOK）:
     ```
     $e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile('_publish.ps1',[ref]$null,[ref]$e); $e
     ```
-14. **`clasp push` 前に必ず突き合わせる**：`push` は**ドライブの中身でサーバーを上書き**する。サーバー側だけで直した
+16. **`clasp push` 前に必ず突き合わせる**：`push` は**ドライブの中身でサーバーを上書き**する。サーバー側だけで直した
     変更は消える。久しぶりに触るときは §2-B' の `clone-script` で落として比較してから push すること。
-15. **アプリ版で「読み込みに失敗しました」**：たいてい ①Apps Scriptを再デプロイして**新バージョンにしていない** ②デプロイのアクセスが
+17. **アプリ版で「読み込みに失敗しました」**：たいてい ①Apps Scriptを再デプロイして**新バージョンにしていない** ②デプロイのアクセスが
     「自分のみ」に戻っている ③トークン不一致、のどれか。⚙設定 →「🔌接続設定」で URL とトークンを入れ直せば直る。
 
 ---

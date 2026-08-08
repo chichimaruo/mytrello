@@ -1,7 +1,7 @@
 ﻿# =============================================================
 #  My Trello - アプリ版(PWA)を公開する
-#  使い方: このファイルを右クリック →「PowerShell で実行」
-#          または PowerShell で  .\_publish.ps1
+#  使い方: ★ 同じフォルダの  _publish.cmd  をダブルクリック ★
+#          （.ps1 を直接ダブルクリックしないこと。理由は下の「なぜ .cmd 経由か」）
 #
 #  やること:
 #   1. _build_pwa.py を実行して webapp/ を作り直す
@@ -9,9 +9,24 @@
 #   3. GitHub へ push  → GitHub Actions が自動で Pages に公開
 #
 #  公開先: https://chichimaruo.github.io/mytrello/
+#
+#  ── なぜ .cmd 経由か ─────────────────────────────────
+#  Googleドライブは同期したファイルに「インターネット由来」の印
+#  (Zone.Identifier / ZoneId=3) を付ける。この PC の実行ポリシーは
+#  RemoteSigned なので、印の付いた未署名スクリプトは実行を拒否され、
+#  右クリック「PowerShell で実行」だと黒い画面が一瞬出て消えるだけになる。
+#  Unblock-File で消しても、ドライブが再同期すると印は戻る。
+#  .cmd から -ExecutionPolicy Bypass で起動すれば恒久的に回避できる。
 # =============================================================
 
-$ErrorActionPreference = 'Stop'
+# 注意: 'Stop' にはしないこと。git や clasp のような外部コマンドは進捗を
+# 標準エラーへ書くことがあり、PowerShell 5.1 はそれを致命的エラー扱いして
+# スクリプトを即死させる。終了コード($LASTEXITCODE)で明示的に判定する。
+$ErrorActionPreference = 'Continue'
+
+function Assert-Ok($what) {
+  if ($LASTEXITCODE -ne 0) { throw ($what + ' に失敗しました (終了コード ' + $LASTEXITCODE + ')') }
+}
 
 $Src  = $PSScriptRoot                        # ドライブ内のプロジェクト（＝正）
 $Repo = 'C:\Users\cruis\repos\mytrello'      # 作業用リポジトリ（Gitはドライブ外に置く）
@@ -44,19 +59,22 @@ if (-not (Test-Path (Join-Path $Repo '.git'))) {
   Step '作業用リポジトリを取得'
   New-Item -ItemType Directory -Force (Split-Path $Repo) | Out-Null
   git clone $RepoUrl $Repo
+  Assert-Ok 'リポジトリの取得'
 }
 
 # ---- 1. ビルド（style.css / index.html / app.js / アイコン / SW版数）----
 Step 'ビルド'
 Push-Location $Src
-try { python _build_pwa.py } finally { Pop-Location }
+try { python _build_pwa.py; Assert-Ok 'ビルド' } finally { Pop-Location }
 
 # ---- 2. リポジトリへコピー ----
 # ※ webapp/ も一緒に送るが、GitHub 側でもビルドし直すので結果は同じになる
 Step 'リポジトリへコピー'
 git -C $Repo pull --ff-only
+Assert-Ok 'git pull'
 
-$files = @('README.md', 'SETUP.md', 'HANDOVER.md', '_build_pwa.py', '_publish.ps1', '_push_gas.ps1', 'myboard-icon.png')
+$files = @('README.md', 'SETUP.md', 'HANDOVER.md', '_build_pwa.py',
+           '_publish.ps1', '_publish.cmd', '_push_gas.ps1', '_push_gas.cmd', 'myboard-icon.png')
 foreach ($f in $files) {
   $p = Join-Path $Src $f
   if (Test-Path $p) { Copy-Item $p (Join-Path $Repo $f) -Force }
@@ -100,7 +118,9 @@ if ($ok -ne 'y') { Write-Host '中止しました（コピーは済んでいま�
 
 Step '公開'
 git -C $Repo commit -m $msg
+Assert-Ok 'git commit'
 git -C $Repo push
+Assert-Ok 'git push'
 
 Write-Host "`n公開しました。1〜2分で反映されます。" -ForegroundColor Green
 Write-Host '  アプリ  : https://chichimaruo.github.io/mytrello/'
