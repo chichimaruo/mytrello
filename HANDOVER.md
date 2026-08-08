@@ -44,6 +44,8 @@ My Trello Project/            ← 正本（Googleドライブ）
 └─ .github/workflows/deploy.yml ← push で自動ビルド＆公開
 ```
 > Apps Script上のファイル名は **Code.gs / Index / Stylesheet / JavaScript**（HTMLは拡張子なしで作成）。大文字小文字も厳密に一致させること。
+> ※ 2026-08-08 まで、サーバー側だけ日本語の既定名 **`コード.gs`** のままだった（この資料の記述と食い違っていた）。
+> 初回の `clasp push` で `Code.gs` に統一済み。`.gs` のファイル名は動作に影響しない（全ファイルが同じスコープ）。
 
 **作業用リポジトリ**: `C:\Users\cruis\repos\mytrello`（GitHub `chichimaruo/mytrello` のクローン）。
 Gitはドライブ同期と相性が悪いので**ドライブの外**に置く。無くても `_publish.ps1` が自動で取り直す。
@@ -77,26 +79,29 @@ Gitはドライブ同期と相性が悪いので**ドライブの外**に置く�
 5. **appsscript.json を編集**するには、Apps Scriptの歯車「プロジェクトの設定」→「`appsscript.json` をエディタで表示」にチェック。
 6. **スコープが増えた回**は、デプロイ/初回操作で**権限の再承認**が出る → 「許可」（「確認されていません」は自作アプリなので 詳細→移動→許可）。
 
-### 2-B'. （任意）コピペをやめる ＝ `_push_gas.ps1`
-`clasp`（Google公式のコマンドツール）を使うと、2-B の「全選択→削除→貼付」を **コマンド1発**に置き換えられる。
-貼り間違い事故（§11-9）が原理的に起きなくなるのが利点。**初回だけ準備が必要**：
+### 2-B'. コピペをやめる ＝ `_push_gas.ps1`（**セットアップ完了済み・そのまま使える**）
+`clasp`（Google公式のコマンドツール）で、2-B の「全選択→削除→貼付」を **コマンド1発**に置き換えられる。
+貼り間違い事故（§11-9）が原理的に起きなくなる。**下記は 2026-08-08 に全て完了済み**：
 
 ```
-npm install -g @google/clasp      … 導入（2026-08-08 実施済み: clasp 3.3.0 / Node v22.17.1）
-clasp login                       … ブラウザが開くので自分のGoogleアカウントを許可
+✅ npm install -g @google/clasp   … clasp 3.3.0 / Node v22.17.1
+✅ clasp login                    … cruisingyui@gmail.com で認証済み
+✅ Google Apps Script API をオン  … script.google.com/home/usersettings
+✅ .clasp.json 作成済み           … scriptId と rootDir=apps-script（公開リポジトリには載せない）
+✅ 初回の突き合わせ＋push 実施     … サーバーとドライブが全ファイル一致
 ```
-さらに https://script.google.com/home/usersettings で **「Google Apps Script API」をオン**（1回だけ）。
 
-> **★初回だけ必ずやる安全確認**：`clasp push` は**このフォルダの中身でサーバー側を上書き**する。
+> **★久しぶりに触るときの安全確認**：`clasp push` は**このフォルダの中身でサーバー側を上書き**する。
 > Apps Scriptのエディタで直接いじって、こちらに写していない変更があると**消える**。
 > 先に別フォルダへ落として見比べること：
 > ```
 > mkdir C:\temp\gas-check ; cd C:\temp\gas-check
-> clasp clone-script <スクリプトID>
+> clasp clone-script <スクリプトID>     ← IDは .clasp.json か「プロジェクトの設定」から
 > ```
-> 落ちてきた `Code.gs` 等が `apps-script/` と同じなら安心して使ってよい。
+> 落ちてきたファイルが `apps-script/` と同じなら安心して使ってよい。
+> **実際、2026-08-08 の初回確認でサーバーとドライブの食い違いが3ファイル見つかった**（§11-12）。形だけの手順ではない。
 
-準備ができたら `_push_gas.ps1` を実行するだけ（scriptIdは初回に聞かれ `.clasp.json` に保存。このファイルは公開リポジトリには載せない）。
+あとは `_push_gas.ps1` を実行するだけ（scriptIdは初回に聞かれ `.clasp.json` に保存。このファイルは公開リポジトリには載せない）。
 中では `clasp show-file-status`（送る中身の確認）→ `clasp push --force` → `clasp list-deployments` →
 `clasp update-deployment <デプロイID>`（新バージョンへ差し替え・**URLは変わらない**）の順で実行する。
 
@@ -248,13 +253,22 @@ UIは画面下部の各 `#overlay`（boardHome, calendar, table, dashboard, time
     アプリ版に入らない、という静かな事故になりやすかったため、**2026-08-08 にビルド生成へ変更**（§2-C）。**webapp/ は絶対に手で編集しない**。
 11. **Gitをドライブの中に置かない**：`H:\マイドライブ\...` 直下の `.git` は同期で中身が消えて空になっていた。
     作業用リポジトリは **`C:\Users\cruis\repos\mytrello`（ドライブ外）**。ドライブが正本、リポジトリは公開用のコピー、という関係。
-12. **`.ps1` は BOM付きUTF-8 で保存する**：Windows PowerShell 5.1 は BOM が無い `.ps1` を cp932 として読むため、
+12. **★`appsscript.json` の `webapp.access` を `MYSELF` に戻さない**：アプリ版(PWA)は GitHub Pages という
+    **別オリジン**から `fetch` するので **`ANYONE_ANONYMOUS` が必須**。`MYSELF` のまま新バージョンをデプロイすると
+    **アプリ版が丸ごと繋がらなくなる**。
+    - 【実際にあった】2026-08-08 の clasp 導入時、ドライブ側だけ PWA化以前の `MYSELF` のまま取り残されていた。
+      サーバー側は `ANYONE_ANONYMOUS`。気づかず push→デプロイしていたらアプリが死んでいた。**ドライブ側を修正済み**。
+    - 公開範囲を広げても危なくない理由：データは `handleApi_` のトークン照合（`API_TOKEN`）で守られており、
+      素のURLで来た他人には `doGet` のガードで案内文しか出ない。
+13. **`.ps1` は BOM付きUTF-8 で保存する**：Windows PowerShell 5.1 は BOM が無い `.ps1` を cp932 として読むため、
     日本語コメントが化けて**構文エラーで起動すらしない**。`_publish.ps1` / `_push_gas.ps1` を編集したら保存形式に注意。
     確認方法（エラーが出なければOK）:
     ```
     $e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile('_publish.ps1',[ref]$null,[ref]$e); $e
     ```
-13. **アプリ版で「読み込みに失敗しました」**：たいてい ①Apps Scriptを再デプロイして**新バージョンにしていない** ②デプロイのアクセスが
+14. **`clasp push` 前に必ず突き合わせる**：`push` は**ドライブの中身でサーバーを上書き**する。サーバー側だけで直した
+    変更は消える。久しぶりに触るときは §2-B' の `clone-script` で落として比較してから push すること。
+15. **アプリ版で「読み込みに失敗しました」**：たいてい ①Apps Scriptを再デプロイして**新バージョンにしていない** ②デプロイのアクセスが
     「自分のみ」に戻っている ③トークン不一致、のどれか。⚙設定 →「🔌接続設定」で URL とトークンを入れ直せば直る。
 
 ---
@@ -270,6 +284,9 @@ UIは画面下部の各 `#overlay`（boardHome, calendar, table, dashboard, time
 - **v3.8 遅延ロード**（`getInitial`/`getMeta`/`getCards`/`getAllCards`）＝起動が大幅に軽くなった。スクロール位置・開いていたカードの復元も追加
 - **v3.9 地図/場所（SCHEMA 16）・リスト折りたたみ（SCHEMA 17）**
 - **v3.10（2026-08-08 保守回）**：`webapp/index.html` を手作業コピーからビルド生成に変更（単一ソース化）、`_publish.ps1` 追加、作業用リポジトリを復旧、README/HANDOVER 整備、残骸ファイル削除
+- **v3.11（2026-08-08）**：clasp 導入で Apps Script 側もコマンド反映に（`_push_gas.ps1`）。
+  その初回突き合わせで**ドライブ側の `appsscript.json` が PWA化以前の `MYSELF` のまま取り残されていた事故要因を発見・修正**（§11-12）。
+  併せてサーバー側に未反映だった iPhone セーフエリア対応CSS・折りたたみ件数のフィルター対応を反映し、全ファイル一致にした
 
 ---
 
