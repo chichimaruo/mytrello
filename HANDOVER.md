@@ -234,6 +234,21 @@ UIは画面下部の各 `#overlay`（boardHome, calendar, table, dashboard, time
 
 ## 10. バックアップ / 復旧
 - **バックアップ**: ⚙設定→自動バックアップをオン（毎日推奨）。`backupNow`が「My Trello Backups」フォルダにDBを日付名コピー（直近10個保持）。
+
+> **★2026-08-08に判明：自動バックアップが止まっていた。**
+> `My Trello Backups` に **2026-06-05 の1個しか無かった**（正常なら直近10個ある）。
+> 6/5に手動で `backupNow` を1回押しただけで、その後2か月ぶん退避が無い状態だった。
+> **オンにしても誰も見ていないと静かに死ぬ**ので、`_publish.ps1` の冒頭に鮮度チェックを入れてある
+> （最新が7日より古いと赤字で警告）。開発のたびに通るので気づける。
+>
+> **自分で確かめる方法**（フォルダを見るだけ・アプリを開かなくてよい）:
+> ```
+> Get-ChildItem 'H:\マイドライブ\My Trello Backups' -File | Sort-Object LastWriteTime -Descending | Select-Object -First 3 LastWriteTime,Name
+> ```
+> 直近の日付が出て、ファイルが複数あれば正常。1個しか無い／日付が古い＝止まっている。
+>
+> ※ `enableBackup` は Apps Script の時刻トリガーを作る関数なので、**外部（clasp等）からは実行できない**
+> （`clasp run-function` はAPI実行可能デプロイ＋GCPプロジェクトが必要）。アプリのUIから操作すること。
 - **DBがおかしくなったら**: Apps Scriptエディタで `listTrelloDbs()` を実行→実行ログで「My Trello DB」一覧確認。データのある正しいDBのIDで `useDb('そのID')` を実行すれば切替（SCHEMA_Vも消えて再移行）。
 - **戻すとき**: バックアップのコピー（My Trello Backups内）を「My Trello DB」に置き換えるか、そのコピーのIDで `useDb()`。
 

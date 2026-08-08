@@ -19,6 +19,26 @@ $RepoUrl = 'https://github.com/chichimaruo/mytrello.git'
 
 function Step($msg) { Write-Host "`n=== $msg ===" -ForegroundColor Cyan }
 
+# ---- バックアップの鮮度チェック ----
+# 2026-08-08、自動バックアップが止まっていて6/5の1個しか残っていない状態が見つかった。
+# 誰も見ていないと静かに死ぬので、開発のたびに通るここで気づけるようにしておく。
+function Check-Backup {
+  $dir = 'H:\マイドライブ\My Trello Backups'
+  if (-not (Test-Path $dir)) { return }
+  $newest = Get-ChildItem $dir -File -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+  if (-not $newest) {
+    Write-Host "`n[!] バックアップが1つもありません。" -ForegroundColor Red
+  } else {
+    $days = [int]((Get-Date) - $newest.LastWriteTime).TotalDays
+    if ($days -le 7) { return }
+    Write-Host ("`n[!] 最新のバックアップが {0} 日前です（{1}）。" -f $days, $newest.Name) -ForegroundColor Red
+  }
+  Write-Host '    アプリの ⚙設定 → 自動バックアップ が オフ か、止まっている可能性があります。' -ForegroundColor Yellow
+  Write-Host '    「毎日」でオンにし直してください。' -ForegroundColor Yellow
+}
+Check-Backup
+
 # ---- 0. 作業用リポジトリが無ければ用意する ----
 if (-not (Test-Path (Join-Path $Repo '.git'))) {
   Step '作業用リポジトリを取得'
