@@ -82,7 +82,7 @@ Gitはドライブ同期と相性が悪いので**ドライブの外**に置く�
 貼り間違い事故（§11-9）が原理的に起きなくなるのが利点。**初回だけ準備が必要**：
 
 ```
-npm install -g @google/clasp      … 導入（Node 22以上が必要。確認済み: v22.17.1）
+npm install -g @google/clasp      … 導入（2026-08-08 実施済み: clasp 3.3.0 / Node v22.17.1）
 clasp login                       … ブラウザが開くので自分のGoogleアカウントを許可
 ```
 さらに https://script.google.com/home/usersettings で **「Google Apps Script API」をオン**（1回だけ）。
@@ -97,8 +97,12 @@ clasp login                       … ブラウザが開くので自分のGoogle
 > 落ちてきた `Code.gs` 等が `apps-script/` と同じなら安心して使ってよい。
 
 準備ができたら `_push_gas.ps1` を実行するだけ（scriptIdは初回に聞かれ `.clasp.json` に保存。このファイルは公開リポジトリには載せない）。
-中で `clasp push --force` → `clasp update-deployment <デプロイID>`（URLは変わらない）まで行う。
-**clasp v3 はコマンド名が v2 から変わっている**点に注意（`deploy -i` → `update-deployment`、`clone` → `clone-script`）。
+中では `clasp show-file-status`（送る中身の確認）→ `clasp push --force` → `clasp list-deployments` →
+`clasp update-deployment <デプロイID>`（新バージョンへ差し替え・**URLは変わらない**）の順で実行する。
+
+**clasp v3 はコマンド名が v2 から変わっている**（`deploy -i` → `update-deployment`、`clone` → `clone-script`、
+`deployments` → `list-deployments`、`status` → `show-file-status`）。旧v2向けの記事をそのまま真似すると動かない。
+上記コマンド名・オプションは clasp 3.3.0 の `--help` で実在を確認済み。
 
 ### 2-C. アプリ版（PWA）の反映 ＝ `_publish.ps1` を実行するだけ
 `My Trello Project\_publish.ps1` を右クリック →「PowerShell で実行」。中でやっていること：

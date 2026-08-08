@@ -9,7 +9,7 @@
 # =============================================================
 #
 #  ── 初回セットアップ（1回だけ）───────────────────────────
-#  1. clasp を入れる
+#  1. clasp を入れる  ※2026-08-08 実施済み（clasp 3.3.0 / Node v22.17.1）
 #       npm install -g @google/clasp
 #  2. Google にログイン（ブラウザが開くので自分のアカウントを許可）
 #       clasp login
@@ -54,9 +54,17 @@ if (-not (Test-Path $claspJson)) {
   Write-Host ".clasp.json を作りました。" -ForegroundColor Green
 }
 
-# ---- 送るファイルの確認 ----
+# ---- ログイン済みか ----
+if (-not (Test-Path "$env:USERPROFILE\.clasprc.json")) {
+  Write-Host 'clasp にログインしていません。先に次を実行してください:' -ForegroundColor Red
+  Write-Host '    clasp login'
+  Read-Host "`nEnter で閉じます"; exit 1
+}
+
+# ---- 送るファイルの確認（clasp 自身に一覧させる）----
 Step '送るファイル'
-Get-ChildItem (Join-Path $Src 'apps-script') -File | ForEach-Object { '  ' + $_.Name + '  (' + $_.Length + ' bytes)' }
+Push-Location $Src
+try { clasp show-file-status } finally { Pop-Location }
 Write-Host "`nこの内容で Apps Script 側を【上書き】します。" -ForegroundColor Yellow
 Write-Host 'サーバー側で直接編集した未反映の変更があると消えます。' -ForegroundColor Yellow
 if ((Read-Host "続けますか? (yes と入力)") -ne 'yes') { Write-Host '中止しました。'; exit 1 }
