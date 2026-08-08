@@ -1,3 +1,5 @@
+/* このファイルは _build_pwa.py が apps-script/JavaScript.html から自動生成しています。
+   手で編集しても次のビルドで上書きされます。直すのは apps-script/JavaScript.html の方。 */
 /* ============================================================
    My Trello - Frontend
    サーバー呼び出しは google.script.run を Promise でラップ
