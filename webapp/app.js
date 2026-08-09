@@ -155,7 +155,25 @@ function renderBoardHome() {
         }
         archiveBoardUI(b);
       });
-      actions.appendChild(ren); actions.appendChild(arch); actions.appendChild(del);
+      const dup = el('button', '', '📄'); dup.title = 'このボードを複製';
+      dup.addEventListener('click', async function (e) {
+        e.stopPropagation();
+        const name = prompt('複製後のボード名:', b.title + ' のコピー');
+        if (!name) return;
+        setStatus('複製中...');
+        const nb = await api.copyBoard(b.id, name);
+        if (!nb) { setStatus(''); alert('複製できませんでした。'); return; }
+        // ラベル・フィールド・リストが増えるのでメタを取り直す
+        const meta = await api.getMeta();
+        STATE.boards = meta.boards; STATE.lists = meta.lists;
+        STATE.labels = meta.labels; STATE.fields = meta.fields;
+        STATE.views = meta.views; STATE.automations = meta.automations; STATE.recurring = meta.recurring;
+        invalidateAllCards();
+        renderBoardHome();
+        setStatus('「' + name + '」を作りました');
+      });
+
+      actions.appendChild(ren); actions.appendChild(dup); actions.appendChild(arch); actions.appendChild(del);
       tile.appendChild(actions);
 
       tile.addEventListener('click', function () {
@@ -582,6 +600,10 @@ let allCardsPromise = null;
 
 function markAllLoaded() { allCardsLoaded = true; allCardsPromise = Promise.resolve(); }
 
+// 「全カード揃っている」状態を取り消す（ボード複製など、サーバー側でカードが増えたとき）。
+// 次に横断ビューを開いたときに取り直される。
+function invalidateAllCards() { allCardsLoaded = false; allCardsPromise = null; }
+
 // 既存カードはそのまま、未取得のカードだけ追加（編集中のものを壊さない）
 function mergeCards(newCards) {
   const have = {};
@@ -610,10 +632,15 @@ async function init() {
     $('#loadError').classList.add('hidden');
     render();
     setStatus('準備完了');
+
+    // スマホの「共有」から開かれた場合は、そのままカード追加へ（通常起動では何も起きない）
+    let fromShare = false;
+    try { fromShare = await handleShareTarget(); } catch (e) {}
+
     // Safari等で再読込された場合、直前の状態（スクロール位置・開いていたカード）を復元
     restoreBoardScroll();
     const lastCard = loadOpenCard();
-    if (lastCard && STATE.cards.some(function (c) { return c.id === lastCard && !c.archived; })) {
+    if (!fromShare && lastCard && STATE.cards.some(function (c) { return c.id === lastCard && !c.archived; })) {
       openModal(lastCard);
     }
     // スクロール位置を保存（負荷軽減のため間引き）
@@ -876,7 +903,7 @@ function restoreCard(card) {
   setStatus('リストに戻しました');
 }
 
-function showArchive() { renderArchive(); $('#archive').classList.remove('hidden'); }
+function showArchive() { renderArchive(); renderTrash(); $('#archive').classList.remove('hidden'); }
 function hideArchive() { $('#archive').classList.add('hidden'); }
 
 function renderArchive() {
@@ -1240,6 +1267,7 @@ function openModal(cardId) {
   hideLabelForm();
   hideFieldForm();
   $('#m-move-panel').classList.add('hidden');
+  resetDescPreview();      // 前のカードのプレビュー表示を持ち越さない
   renderModal();
   $('#modal').classList.remove('hidden');
   autoGrow($('#m-desc')); // 表示後に高さを中身へ合わせる
@@ -2634,7 +2662,387 @@ function toggleLabelByIndex(card, i) {
 }
 
 /* --------------------------- イベント結線 --------------------------- */
+/* ========================================================================
+   ここから下は 2026-08-09 追加分
+   今日ビュー / ゴミ箱 / ボード複製 / エクスポート / 健康診断 /
+   Markdownプレビュー / テーマ切替 / 共有ターゲット
+   ======================================================================== */
+
+/* --------------------------- 今日やること（全ボード横断） --------------------------- */
+function hideToday() { $('#today').classList.add('hidden'); }
+
+async function showToday() {
+  $('#today').classList.remove('hidden');
+  $('#todayBody').innerHTML = '<div class="set-note">読み込み中...</div>';
+  try { await ensureAllCards(); } catch (e) {}   // 横断ビューなので全カードが要る
+  renderToday();
+}
+
+function renderToday() {
+  const body = $('#todayBody'); body.innerHTML = '';
+  const todayStr = ymd(new Date());
+  const listById = {}; STATE.lists.forEach(function (l) { listById[l.id] = l; });
+  const boardById = {}; STATE.boards.forEach(function (b) { boardById[b.id] = b; });
+
+  // 期限が今日以前で、完了していない・アーカイブしていないカード
+  const target = STATE.cards.filter(function (c) {
+    if (c.archived || c.done || c.template) return false;
+    const end = c.due || '';
+    if (!end) return false;
+    const list = listById[c.listId];
+    if (!list || list.archived) return false;
+    const board = boardById[list.boardId];
+    if (!board || board.archived) return false;
+    return end <= todayStr;
+  });
+
+  if (!target.length) {
+    body.appendChild(el('div', 'set-note', '今日締め切りのカードはありません。'));
+    return;
+  }
+
+  // 期限切れ / 今日 の2組に分ける
+  const overdue = target.filter(function (c) { return c.due < todayStr; })
+    .sort(function (a, b) { return a.due.localeCompare(b.due); });
+  const due = target.filter(function (c) { return c.due === todayStr; });
+
+  function section(title, cards, cls) {
+    if (!cards.length) return;
+    body.appendChild(el('h3', 'arch-head', title + '（' + cards.length + '）'));
+    cards.forEach(function (c) {
+      const list = listById[c.listId] || {};
+      const board = boardById[list.boardId] || {};
+      const row = el('div', 'today-row ' + cls);
+      row.style.borderLeftColor = boardColor(board.id);
+
+      const main = el('div', 'today-main');
+      main.appendChild(el('div', 'today-title', esc(c.title)));
+      main.appendChild(el('div', 'today-meta',
+        esc(board.title || '') + ' ／ ' + esc(list.title || '') +
+        (c.due < todayStr ? '　⚠ ' + esc(c.due) : '')));
+      row.appendChild(main);
+
+      const done = el('button', 'ghost-btn small dark', '✓ 完了');
+      done.addEventListener('click', function (e) {
+        e.stopPropagation();
+        c.done = true;
+        api.updateCard(c.id, { done: true });
+        renderToday(); refreshCardNode(c);
+        setStatus('完了にしました');
+      });
+      row.appendChild(done);
+
+      // クリックでそのボードへ移動してカードを開く
+      row.addEventListener('click', function () {
+        if (board.id && board.id !== currentBoardId) {
+          currentBoardId = board.id; saveCurrentBoard(board.id); render();
+        }
+        hideToday();
+        openModal(c.id);
+      });
+      body.appendChild(row);
+    });
+  }
+
+  section('⚠ 期限切れ', overdue, 'overdue');
+  section('☀ 今日まで', due, '');
+}
+
+/* --------------------------- ゴミ箱 --------------------------- */
+async function renderTrash() {
+  const cont = $('#trashList');
+  if (!cont) return;
+  cont.innerHTML = '<div class="set-note">読み込み中...</div>';
+  let items = [];
+  try { items = await api.getTrash(); } catch (e) {
+    cont.innerHTML = '<div class="set-note">ゴミ箱を読み込めませんでした: ' + esc(e) + '</div>';
+    return;
+  }
+  cont.innerHTML = '';
+  if (!items.length) {
+    cont.appendChild(el('div', 'set-note', 'ゴミ箱は空です。'));
+    return;
+  }
+  items.forEach(function (c) {
+    const row = el('div', 'arch-row');
+    row.appendChild(el('span', 'arch-title',
+      esc(c.title) + ' <span class="trash-where">' + esc(c.boardTitle) + ' / ' + esc(c.listTitle) + '</span>'));
+
+    const back = el('button', 'ghost-btn small dark', '元に戻す');
+    back.addEventListener('click', async function () {
+      await api.restoreCard(c.id);
+      // 元のボードを開いている場合だけ画面へ戻す。違うボードなら次に開いたときに出る
+      await reloadCurrentBoardCards();
+      renderTrash(); render();
+      setStatus('元に戻しました');
+    });
+
+    const purge = el('button', 'danger-btn arch-del', '完全に削除');
+    purge.addEventListener('click', async function () {
+      if (!confirm('「' + c.title + '」を完全に削除します。\n添付ファイルもドライブのゴミ箱へ移ります。\n取り消せません。よろしいですか?')) return;
+      await api.purgeCard(c.id);
+      renderTrash();
+      setStatus('完全に削除しました');
+    });
+
+    row.appendChild(back); row.appendChild(purge);
+    cont.appendChild(row);
+  });
+}
+
+// ゴミ箱から戻したカードを画面に反映するため、今のボードのカードだけ取り直す
+async function reloadCurrentBoardCards() {
+  if (!currentBoardId) return;
+  try {
+    const fresh = await api.getCards(currentBoardId);
+    const ids = {}; STATE.lists.forEach(function (l) { if (l.boardId === currentBoardId) ids[l.id] = 1; });
+    STATE.cards = STATE.cards.filter(function (c) { return !ids[c.listId]; }).concat(fresh.map(normalizeCard));
+  } catch (e) {}
+}
+
+/* --------------------------- エクスポート --------------------------- */
+function downloadFile(name, text, mime) {
+  const blob = new Blob(['﻿' + text], { type: (mime || 'text/plain') + ';charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+}
+
+function csvCell(v) {
+  const s = String(v == null ? '' : v);
+  return '"' + s.replace(/"/g, '""') + '"';
+}
+
+async function exportJson() {
+  setStatus('書き出し中...');
+  const data = await api.exportAll();
+  downloadFile('mytrello_' + ymd(new Date()) + '.json', JSON.stringify(data, null, 2), 'application/json');
+  setStatus('JSONを書き出しました');
+}
+
+async function exportCsv() {
+  setStatus('書き出し中...');
+  const data = await api.exportAll();
+  const listById = {}; (data.lists || []).forEach(function (l) { listById[l.id] = l; });
+  const boardById = {}; (data.boards || []).forEach(function (b) { boardById[b.id] = b; });
+  const labelById = {}; (data.labels || []).forEach(function (l) { labelById[l.id] = l; });
+
+  const head = ['ボード', 'リスト', 'カード', '説明', '開始', '期限', '完了', 'ラベル', 'チェックリスト', 'コメント数', '作成日', '更新日'];
+  const rows = [head.map(csvCell).join(',')];
+
+  (data.cards || []).forEach(function (c) {
+    if (c.archived) return;
+    const list = listById[c.listId] || {};
+    const board = boardById[list.boardId] || {};
+    const labels = (c.labels || []).map(function (id) { return (labelById[id] || {}).name || ''; }).filter(Boolean).join(' / ');
+    const cl = (c.checklist || []);
+    const clDone = cl.filter(function (i) { return i && i.done; }).length;
+    rows.push([
+      board.title || '', list.title || '', c.title || '', c.desc || '',
+      c.start || '', c.due || '', c.done ? '済' : '',
+      labels, cl.length ? (clDone + '/' + cl.length) : '',
+      (c.comments || []).length, c.createdAt || '', c.updatedAt || ''
+    ].map(csvCell).join(','));
+  });
+
+  downloadFile('mytrello_cards_' + ymd(new Date()) + '.csv', rows.join('\r\n'), 'text/csv');
+  setStatus('CSVを書き出しました');
+}
+
+/* --------------------------- 健康診断 --------------------------- */
+async function showHealth() {
+  const body = $('#healthBody');
+  body.innerHTML = '<div class="set-note">確認中...</div>';
+  let h;
+  try { h = await api.healthCheck(); } catch (e) {
+    body.innerHTML = '<div class="set-note">確認できませんでした: ' + esc(e) + '</div>';
+    return;
+  }
+  body.innerHTML = '';
+
+  function line(label, value, state) {
+    const row = el('div', 'health-row' + (state ? ' ' + state : ''));
+    row.appendChild(el('span', 'health-label', esc(label)));
+    row.appendChild(el('span', 'health-value', value));  // valueはHTML可
+    body.appendChild(row);
+  }
+
+  // バックアップ
+  const b = h.backup || {};
+  let bkState = 'ng', bkText;
+  if (!b.last) {
+    bkText = '一度も取られていません';
+  } else if (b.ageDays === null || b.ageDays === undefined) {
+    bkText = esc(b.last); bkState = '';
+  } else if (b.ageDays <= 2) {
+    bkText = esc(b.last) + '（' + b.ageDays + '日前）'; bkState = 'ok';
+  } else if (b.ageDays <= 7) {
+    bkText = esc(b.last) + '（' + b.ageDays + '日前）'; bkState = 'warn';
+  } else {
+    bkText = esc(b.last) + '（<b>' + b.ageDays + '日前</b> — 止まっている可能性）';
+  }
+  line('最終バックアップ', bkText, bkState);
+  line('自動バックアップ', b.freq ? esc(b.freq === 'weekly' ? '毎週' : '毎日') : '<b>オフ</b>', b.freq ? 'ok' : 'ng');
+
+  // トリガー
+  const tg = h.triggers || [];
+  const names = tg.map(function (t) { return t.fn; });
+  line('登録トリガー', tg.length ? esc(names.join(', ')) : '<b>なし</b>', tg.length ? 'ok' : 'ng');
+
+  // 件数
+  const c = h.counts || {};
+  line('データ件数', 'ボード ' + c.boards + ' ／ リスト ' + c.lists + ' ／ カード ' + c.cards, '');
+  line('ゴミ箱', (c.trash || 0) + ' 件', (c.trash > 50 ? 'warn' : ''));
+
+  // 構成
+  line('スキーマ版数', esc(h.schemaVersion), '');
+  const f = h.flags || {};
+  line('APIトークン', f.apiToken ? '設定済み' : '<b>未設定</b>', f.apiToken ? 'ok' : 'ng');
+  line('AIキー(Gemini)', f.geminiKey ? '設定済み' : '未設定', '');
+  line('共有モード', f.sharing ? '有効' : '無効', '');
+  if (h.dbUrl) {
+    line('データの保存先', '<a href="' + esc(h.dbUrl) + '" target="_blank" rel="noopener">スプレッドシートを開く</a>', '');
+  }
+  if (b.folderUrl) {
+    line('バックアップ置き場', '<a href="' + esc(b.folderUrl) + '" target="_blank" rel="noopener">フォルダを開く</a>', '');
+  }
+}
+
+/* --------------------------- Markdown（簡易・外部ライブラリなし） --------------------------- */
+// 教材メモ程度に使う範囲だけ。見出し/太字/斜体/コード/リンク/箇条書き/番号/引用/水平線。
+// esc() を必ず先に通してから記号を変換するので、HTMLの混入は起きない。
+function renderMarkdown(src) {
+  const lines = String(src == null ? '' : src).split(/\r?\n/);
+  let out = '', listType = null;
+
+  function closeList() { if (listType) { out += '</' + listType + '>'; listType = null; } }
+
+  function inline(t) {
+    return esc(t)
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>')
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+      // 素のURLも自動でリンクに（すでにリンク化した中身は href= の直後なので除外）
+      .replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
+  }
+
+  lines.forEach(function (raw) {
+    const line = raw.replace(/\s+$/, '');
+    if (!line.trim()) { closeList(); return; }
+
+    let m;
+    if ((m = line.match(/^(#{1,4})\s+(.*)$/))) {
+      closeList();
+      const lv = Math.min(6, m[1].length + 2);   // # は h3 相当から（画面の見出しと衝突させない）
+      out += '<h' + lv + '>' + inline(m[2]) + '</h' + lv + '>';
+    } else if (/^(-{3,}|\*{3,})$/.test(line.trim())) {
+      closeList(); out += '<hr>';
+    } else if ((m = line.match(/^\s*[-*+]\s+(.*)$/))) {
+      if (listType !== 'ul') { closeList(); out += '<ul>'; listType = 'ul'; }
+      out += '<li>' + inline(m[1]) + '</li>';
+    } else if ((m = line.match(/^\s*\d+[.)]\s+(.*)$/))) {
+      if (listType !== 'ol') { closeList(); out += '<ol>'; listType = 'ol'; }
+      out += '<li>' + inline(m[1]) + '</li>';
+    } else if ((m = line.match(/^>\s?(.*)$/))) {
+      closeList(); out += '<blockquote>' + inline(m[1]) + '</blockquote>';
+    } else {
+      closeList(); out += '<p>' + inline(line) + '</p>';
+    }
+  });
+  closeList();
+  return out;
+}
+
+function toggleDescPreview() {
+  const ta = $('#m-desc'), box = $('#m-desc-rendered'), btn = $('#m-desc-preview');
+  if (!ta || !box) return;
+  const showing = !box.classList.contains('hidden');
+  if (showing) {
+    box.classList.add('hidden'); ta.classList.remove('hidden');
+    btn.textContent = '👁 プレビュー';
+    ta.focus();
+  } else {
+    box.innerHTML = ta.value.trim() ? renderMarkdown(ta.value) : '<span class="set-note">（説明は空です）</span>';
+    box.classList.remove('hidden'); ta.classList.add('hidden');
+    btn.textContent = '✏ 編集にもどす';
+  }
+}
+
+// カードを開くたびに編集状態へ戻す（前のカードのプレビューが残らないように）
+function resetDescPreview() {
+  const box = $('#m-desc-rendered'), ta = $('#m-desc'), btn = $('#m-desc-preview');
+  if (box) box.classList.add('hidden');
+  if (ta) ta.classList.remove('hidden');
+  if (btn) btn.textContent = '👁 プレビュー';
+}
+
+/* --------------------------- テーマ（ライト/ダーク/自動） --------------------------- */
+function loadTheme() { return localStorage.getItem('theme') || 'auto'; }
+
+function applyTheme(mode) {
+  const root = document.documentElement;
+  root.classList.remove('theme-dark', 'theme-light');
+  let effective = mode;
+  if (mode === 'auto') {
+    effective = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+  }
+  root.classList.add(effective === 'dark' ? 'theme-dark' : 'theme-light');
+  const btns = document.querySelectorAll('.theme-btn');
+  for (let i = 0; i < btns.length; i++) {
+    btns[i].classList.toggle('active', btns[i].dataset.theme === mode);
+  }
+}
+
+function setTheme(mode) {
+  localStorage.setItem('theme', mode);
+  applyTheme(mode);
+}
+
+/* --------------------------- 共有ターゲット（スマホの「共有」から） --------------------------- */
+// PWAのmanifestで share_target を宣言しているので、共有されると
+// ?share_title=...&share_text=...&share_url=... 付きで開かれる。
+// Apps Script版ではこのパラメータは付かないので、何も起きない。
+async function handleShareTarget() {
+  const q = new URLSearchParams(location.search);
+  const title = q.get('share_title') || q.get('title') || '';
+  const text = q.get('share_text') || q.get('text') || '';
+  const url = q.get('share_url') || q.get('url') || '';
+  if (!title && !text && !url) return false;
+
+  // URLはパラメータのどれに入ってくるか端末差があるので、text の中からも拾う
+  let link = url;
+  if (!link) {
+    const m = text.match(/https?:\/\/\S+/);
+    if (m) link = m[0];
+  }
+  const cardTitle = (title || (text ? text.split(/\r?\n/)[0] : '') || link || '共有メモ').slice(0, 120);
+
+  // アドレスバーを綺麗にしておく（再読み込みで二重登録されないように）
+  history.replaceState(null, '', location.pathname);
+
+  const lists = boardLists();
+  if (!lists.length) { alert('先にリストを作ってください。'); return true; }
+  const target = lists[0];
+
+  if (!confirm('共有された内容をカードにします。\n\n' + cardTitle + '\n\nリスト「' + target.title + '」に追加しますか?')) return true;
+
+  const card = normalizeCard(await api.addCard(target.id, cardTitle));
+  const desc = [text && text !== cardTitle ? text : '', link ? link : ''].filter(Boolean).join('\n\n');
+  if (desc) { card.desc = desc; await api.updateCard(card.id, { desc: desc }); }
+  if (link) { card.links = [link]; await api.updateCard(card.id, { links: card.links }); }
+  STATE.cards.push(card);
+  render();
+  setStatus('共有からカードを追加しました');
+  openModal(card.id);
+  return true;
+}
+
 function bindUI() {
+  applyTheme(loadTheme());   // 画面がちらつかないよう、他の配線より先に
+
   $('#addListBtn').addEventListener('click', async function () {
     if (!currentBoardId) { alert('先にボードを作成してください'); return; }
     const name = prompt('リスト名:');
@@ -2688,6 +3096,34 @@ function bindUI() {
   // アーカイブ（カード）
   $('#archBtn').addEventListener('click', showArchive);
   $('#archClose').addEventListener('click', hideArchive);
+
+  /* ---- 2026-08-09 追加分の配線 ---- */
+  $('#todayBtn').addEventListener('click', showToday);
+  $('#todayClose').addEventListener('click', hideToday);
+
+  $('#trashEmptyBtn').addEventListener('click', async function () {
+    if (!confirm('ゴミ箱の中身をすべて完全に削除します。\n添付ファイルもドライブのゴミ箱へ移ります。\n取り消せません。よろしいですか?')) return;
+    const n = await api.emptyTrash();
+    renderTrash();
+    setStatus((n || 0) + ' 件を完全に削除しました');
+  });
+
+  $('#exportJsonBtn').addEventListener('click', exportJson);
+  $('#exportCsvBtn').addEventListener('click', exportCsv);
+  $('#healthBtn').addEventListener('click', showHealth);
+  $('#m-desc-preview').addEventListener('click', toggleDescPreview);
+
+  const themeBtns = document.querySelectorAll('.theme-btn');
+  for (let i = 0; i < themeBtns.length; i++) {
+    themeBtns[i].addEventListener('click', function () { setTheme(this.dataset.theme); });
+  }
+  // 「自動」のときは端末側の設定変更に追随する
+  if (window.matchMedia) {
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const onChange = function () { if (loadTheme() === 'auto') applyTheme('auto'); };
+    if (mq.addEventListener) mq.addEventListener('change', onChange);
+    else if (mq.addListener) mq.addListener(onChange);
+  }
   $('#archive').addEventListener('click', function (e) {
     if (e.target.id === 'archive') hideArchive();
   });

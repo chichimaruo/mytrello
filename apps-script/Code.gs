@@ -13,7 +13,7 @@ const SCHEMA = {
   Lists:  ['id', 'title', 'position', 'archived', 'boardId', 'wip', 'collapsed'],
   Cards:  ['id', 'listId', 'title', 'desc', 'position', 'labels',
            'due', 'checklist', 'comments', 'createdAt', 'updatedAt', 'archived',
-           'attachments', 'start', 'allDay', 'done', 'ratings', 'fields', 'cover', 'template', 'links', 'sync', 'places'],
+           'attachments', 'start', 'allDay', 'done', 'ratings', 'fields', 'cover', 'template', 'links', 'sync', 'places', 'deleted'],
   Labels: ['id', 'name', 'color', 'boardId'],
   Fields: ['id', 'boardId', 'name', 'type', 'config', 'position', 'showFront'],
   Views: ['id', 'name', 'config', 'position'],
@@ -63,6 +63,8 @@ function doPost(e) { return handleApi_(e); }
 const API_ALLOWED = {
   apiPing: 1,
   getInitial: 1, getState: 1, getMeta: 1, getCards: 1, getAllCards: 1,
+  getTrash: 1, restoreCard: 1, purgeCard: 1, emptyTrash: 1,
+  exportAll: 1, healthCheck: 1, copyBoard: 1,
   addBoard: 1, renameBoard: 1, deleteBoard: 1, archiveBoard: 1, setBoardBackground: 1,
   addList: 1, renameList: 1, deleteList: 1, archiveList: 1, copyList: 1,
   archiveAllCards: 1, setListWip: 1, setListCollapsed: 1, setAllListsCollapsed: 1, saveListOrder: 1,
@@ -167,7 +169,7 @@ function ensureColumn_(sheet, colName, defaultVal) {
   }
 }
 
-const SCHEMA_VERSION = '17';
+const SCHEMA_VERSION = '18';
 
 function ensureSchema_(ss) {
   if (PROP.getProperty('SCHEMA_V') === SCHEMA_VERSION) return;
@@ -281,6 +283,9 @@ function ensureSchema_(ss) {
 
   // v17: リストの折りたたみ
   ensureColumn_(ss.getSheetByName('Lists'), 'collapsed', false);
+
+  // v18: ゴミ箱（削除を取り消せるようにする論理削除フラグ）
+  ensureColumn_(ss.getSheetByName('Cards'), 'deleted', false);
 
   // v7: 汎用カスタムフィールド（ボードごと）
   ensureColumn_(ss.getSheetByName('Cards'), 'fields', '{}');
@@ -456,11 +461,15 @@ function parseCard_(c) {
   c.links       = parseJson_(c.links, []);
   c.sync        = parseJson_(c.sync, {});
   c.places      = parseJson_(c.places, []);
+  c.deleted     = c.deleted === true || c.deleted === 'TRUE';
   c.start       = toYmd_(c.start);
   c.due         = toYmd_(c.due);
   c.position    = Number(c.position) || 0;
   return c;
 }
+
+// ゴミ箱行の判定（parseCard_ を通す前の生データにも使える）
+function isTrashed_(c) { return c.deleted === true || c.deleted === 'TRUE'; }
 
 /* ---- 遅延ロード用：メタ情報（カード以外）／ボード単位カード／全カード ---- */
 function getMeta() {
@@ -472,15 +481,37 @@ function getCards(boardId) {
     .filter(function (l) { return l.boardId === boardId; })
     .map(function (l) { return l.id; });
   const cards = sheetObjects_(ss.getSheetByName('Cards'))
-    .filter(function (c) { return listIds.indexOf(c.listId) >= 0; });
+    .filter(function (c) { return listIds.indexOf(c.listId) >= 0 && !isTrashed_(c); });
   cards.forEach(parseCard_);
   cards.sort(function (a, b) { return a.position - b.position; });
   return cards;
 }
 function getAllCards() {
-  const cards = sheetObjects_(getSS_().getSheetByName('Cards'));
+  const cards = sheetObjects_(getSS_().getSheetByName('Cards'))
+    .filter(function (c) { return !isTrashed_(c); });
   cards.forEach(parseCard_);
   cards.sort(function (a, b) { return a.position - b.position; });
+  return cards;
+}
+
+// ゴミ箱の中身（削除されたカードだけ）。復元/完全削除の画面用。
+function getTrash() {
+  const ss = getSS_();
+  const lists = sheetObjects_(ss.getSheetByName('Lists'));
+  const boards = sheetObjects_(ss.getSheetByName('Boards'));
+  const listMap = {}; lists.forEach(function (l) { listMap[l.id] = l; });
+  const boardMap = {}; boards.forEach(function (b) { boardMap[b.id] = b; });
+  const cards = sheetObjects_(ss.getSheetByName('Cards'))
+    .filter(isTrashed_);
+  cards.forEach(parseCard_);
+  cards.forEach(function (c) {
+    const l = listMap[c.listId];
+    c.listTitle = l ? l.title : '(不明なリスト)';
+    const b = l ? boardMap[l.boardId] : null;
+    c.boardTitle = b ? b.title : '(不明なボード)';
+  });
+  // 新しく捨てたものが上
+  cards.sort(function (a, b) { return String(b.updatedAt).localeCompare(String(a.updatedAt)); });
   return cards;
 }
 
@@ -495,7 +526,8 @@ function getInitial(boardId) {
   }
   if (bid) {
     const listIds = meta.lists.filter(function (l) { return l.boardId === bid; }).map(function (l) { return l.id; });
-    const cards = sheetObjects_(ss.getSheetByName('Cards')).filter(function (c) { return listIds.indexOf(c.listId) >= 0; });
+    const cards = sheetObjects_(ss.getSheetByName('Cards'))
+      .filter(function (c) { return listIds.indexOf(c.listId) >= 0 && !isTrashed_(c); });
     cards.forEach(parseCard_);
     cards.sort(function (a, b) { return a.position - b.position; });
     meta.cards = cards;
@@ -599,6 +631,93 @@ function setBoardBackground(boardId, url) {
   });
 }
 
+// ボードをまるごと複製（リスト・カード・ラベル・カスタムフィールドを引き継ぐ）
+// 「昨年度と同じ流れをもう一度」「1組の進行を2組にも」といった使い方向け。
+// コメント/添付は引き継がない（copyList と同じ方針）。アーカイブ済みとゴミ箱の中身は複製しない。
+function copyBoard(boardId, newTitle) {
+  return withLock_(function () {
+    const ss = getSS_();
+    const bsh = ss.getSheetByName('Boards');
+    const src = sheetObjects_(bsh).filter(function (b) { return b.id === boardId; })[0];
+    if (!src) return null;
+
+    const now = new Date().toISOString();
+    const newBoardId = Utilities.getUuid();
+    const maxPos = sheetObjects_(bsh).reduce(function (m, o) { return Math.max(m, Number(o.position) || 0); }, -1);
+    const board = {
+      id: newBoardId,
+      title: newTitle || ((src.title || '') + ' のコピー'),
+      position: maxPos + 1, archived: false, createdAt: now,
+      background: src.background || '', shareToken: ''   // 共有トークンは引き継がない
+    };
+    bsh.appendRow(rowFromObject_('Boards', board));
+
+    // ラベル（このボード専用のものだけ複製。全ボード共通=boardId空 はそのまま使える）
+    const lbSh = ss.getSheetByName('Labels');
+    const labelIdMap = {};
+    const newLabels = sheetObjects_(lbSh).filter(function (l) { return l.boardId === boardId; })
+      .map(function (l) {
+        const nid = Utilities.getUuid();
+        labelIdMap[l.id] = nid;
+        return { id: nid, name: l.name, color: l.color, boardId: newBoardId };
+      });
+    if (newLabels.length) appendRows_(lbSh, 'Labels', newLabels);
+
+    // カスタムフィールド
+    const fSh = ss.getSheetByName('Fields');
+    const fieldIdMap = {};
+    const newFields = sheetObjects_(fSh).filter(function (f) { return f.boardId === boardId; })
+      .map(function (f) {
+        const nid = Utilities.getUuid();
+        fieldIdMap[f.id] = nid;
+        return { id: nid, boardId: newBoardId, name: f.name, type: f.type,
+                 config: f.config, position: Number(f.position) || 0, showFront: f.showFront === true || f.showFront === 'TRUE' };
+      });
+    if (newFields.length) appendRows_(fSh, 'Fields', newFields);
+
+    // リスト
+    const lsh = ss.getSheetByName('Lists');
+    const listIdMap = {};
+    const srcLists = sheetObjects_(lsh)
+      .filter(function (l) { return l.boardId === boardId && !(l.archived === true || l.archived === 'TRUE'); })
+      .sort(function (a, b) { return (Number(a.position) || 0) - (Number(b.position) || 0); });
+    const newLists = srcLists.map(function (l, idx) {
+      const nid = Utilities.getUuid();
+      listIdMap[l.id] = nid;
+      return { id: nid, title: l.title, position: idx, archived: false, boardId: newBoardId,
+               wip: Number(l.wip) || 0, collapsed: false };
+    });
+    if (newLists.length) appendRows_(lsh, 'Lists', newLists);
+
+    // カード（ラベルIDとフィールドIDを新しいものへ張り替える）
+    const csh = ss.getSheetByName('Cards');
+    const srcCards = sheetObjects_(csh)
+      .filter(function (c) { return listIdMap[c.listId] && !(c.archived === true || c.archived === 'TRUE') && !isTrashed_(c); })
+      .sort(function (a, b) { return (Number(a.position) || 0) - (Number(b.position) || 0); });
+    const posByList = {};
+    const newCards = srcCards.map(function (c) {
+      const o = {}; SCHEMA.Cards.forEach(function (k) { o[k] = c[k]; });
+      o.id = Utilities.getUuid();
+      o.listId = listIdMap[c.listId];
+      posByList[o.listId] = (posByList[o.listId] === undefined) ? 0 : posByList[o.listId] + 1;
+      o.position = posByList[o.listId];
+      o.comments = '[]'; o.attachments = '[]'; o.sync = '{}';
+      o.createdAt = now; o.updatedAt = now; o.deleted = false;
+
+      const labels = parseJson_(c.labels, []).map(function (id) { return labelIdMap[id] || id; });
+      o.labels = JSON.stringify(labels);
+
+      const fv = parseJson_(c.fields, {}); const nf = {};
+      Object.keys(fv).forEach(function (k) { nf[fieldIdMap[k] || k] = fv[k]; });
+      o.fields = JSON.stringify(nf);
+      return o;
+    });
+    if (newCards.length) appendRows_(csh, 'Cards', newCards);
+
+    return board;
+  });
+}
+
 /* ====================== 背景画像検索 (Wikimedia Commons) ====================== */
 
 // Wikimedia Commons から画像を検索（自由ライセンスの画像群）
@@ -685,7 +804,7 @@ function addCard(listId, title) {
       id: Utilities.getUuid(), listId: listId, title: title, desc: '',
       position: maxPos + 1, labels: '[]', due: '', checklist: '[]',
       comments: '[]', createdAt: now, updatedAt: now, archived: false,
-      attachments: '[]', start: '', allDay: true, done: false, ratings: '{}', fields: '{}', cover: '', template: false, links: '[]', sync: '{}', places: '[]'
+      attachments: '[]', start: '', allDay: true, done: false, ratings: '{}', fields: '{}', cover: '', template: false, links: '[]', sync: '{}', places: '[]', deleted: false
     };
     sh.appendRow(rowFromObject_('Cards', card));
     return card;
@@ -721,7 +840,37 @@ function trashAttachmentsJson_(attJson) {
   });
 }
 
+// カード削除＝ゴミ箱へ（論理削除）。行も添付も残すので取り消せる。
+// 本当に消すのは purgeCard / emptyTrash。
 function deleteCard(id) {
+  return withLock_(function () {
+    const sh = getSS_().getSheetByName('Cards');
+    const colIndex = {}; SCHEMA.Cards.forEach(function (k, i) { colIndex[k] = i + 1; });
+    const row = findRow_(sh, id);
+    if (row > 0) {
+      sh.getRange(row, colIndex['deleted']).setValue(true);
+      sh.getRange(row, colIndex['updatedAt']).setValue(new Date().toISOString());
+    }
+    return true;
+  });
+}
+
+// ゴミ箱から戻す
+function restoreCard(id) {
+  return withLock_(function () {
+    const sh = getSS_().getSheetByName('Cards');
+    const colIndex = {}; SCHEMA.Cards.forEach(function (k, i) { colIndex[k] = i + 1; });
+    const row = findRow_(sh, id);
+    if (row > 0) {
+      sh.getRange(row, colIndex['deleted']).setValue(false);
+      sh.getRange(row, colIndex['updatedAt']).setValue(new Date().toISOString());
+    }
+    return true;
+  });
+}
+
+// 完全に削除（行を消し、添付もDriveのゴミ箱へ）。取り消せない。
+function purgeCard(id) {
   return withLock_(function () {
     const sh = getSS_().getSheetByName('Cards');
     const colIndex = {}; SCHEMA.Cards.forEach(function (k, i) { colIndex[k] = i + 1; });
@@ -731,6 +880,28 @@ function deleteCard(id) {
       sh.deleteRow(row);
     }
     return true;
+  });
+}
+
+// ゴミ箱を空にする（下の行から消さないと行番号がずれる）
+function emptyTrash() {
+  return withLock_(function () {
+    const sh = getSS_().getSheetByName('Cards');
+    const colIndex = {}; SCHEMA.Cards.forEach(function (k, i) { colIndex[k] = i + 1; });
+    const last = sh.getLastRow();
+    if (last < 2) return 0;
+    const delCol = sh.getRange(2, colIndex['deleted'], last - 1, 1).getValues();
+    const attCol = sh.getRange(2, colIndex['attachments'], last - 1, 1).getValues();
+    let n = 0;
+    for (let i = delCol.length - 1; i >= 0; i--) {
+      const v = delCol[i][0];
+      if (v === true || v === 'TRUE') {
+        trashAttachmentsJson_(attCol[i][0]);
+        sh.deleteRow(i + 2);
+        n++;
+      }
+    }
+    return n;
   });
 }
 
@@ -850,7 +1021,7 @@ function sendDueReminders(force) {
   const ss = getSS_();
   const lists = sheetObjects_(ss.getSheetByName('Lists'));
   const boards = sheetObjects_(ss.getSheetByName('Boards'));
-  const cards = sheetObjects_(ss.getSheetByName('Cards'));
+  const cards = sheetObjects_(ss.getSheetByName('Cards')).filter(function (c) { return !isTrashed_(c); });
   const listMap = {}; lists.forEach(function (l) { listMap[l.id] = l; });
   const boardMap = {}; boards.forEach(function (b) { boardMap[b.id] = b; });
 
@@ -917,7 +1088,7 @@ function copyList(listId) {
     const csh = ss.getSheetByName('Cards');
     const now = new Date().toISOString();
     const cards = sheetObjects_(csh)
-      .filter(function (c) { return c.listId === listId && !(c.archived === true || c.archived === 'TRUE'); })
+      .filter(function (c) { return c.listId === listId && !(c.archived === true || c.archived === 'TRUE') && !isTrashed_(c); })
       .sort(function (a, b) { return (Number(a.position) || 0) - (Number(b.position) || 0); });
     const rows = cards.map(function (c, idx) {
       const o = {}; SCHEMA.Cards.forEach(function (k) { o[k] = c[k]; });
@@ -1104,7 +1275,7 @@ function renderSharedBoard_(boardId, token) {
     .sort(function (a, b) { return (Number(a.position) || 0) - (Number(b.position) || 0); });
   const labelMap = {}; sheetObjects_(ss.getSheetByName('Labels')).forEach(function (l) { labelMap[l.id] = l; });
   const cards = sheetObjects_(ss.getSheetByName('Cards'))
-    .filter(function (c) { return !(c.archived === true || c.archived === 'TRUE'); })
+    .filter(function (c) { return !(c.archived === true || c.archived === 'TRUE') && !isTrashed_(c); })
     .sort(function (a, b) { return (Number(a.position) || 0) - (Number(b.position) || 0); });
 
   let html = '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
@@ -1613,7 +1784,7 @@ function aiSummarizeBoard(boardId) {
   const lists = sheetObjects_(ss.getSheetByName('Lists'))
     .filter(function (l) { return l.boardId === boardId && !(l.archived === true || l.archived === 'TRUE'); })
     .sort(function (a, b) { return (Number(a.position) || 0) - (Number(b.position) || 0); });
-  const cards = sheetObjects_(ss.getSheetByName('Cards')).filter(function (c) { return !(c.archived === true || c.archived === 'TRUE'); });
+  const cards = sheetObjects_(ss.getSheetByName('Cards')).filter(function (c) { return !(c.archived === true || c.archived === 'TRUE') && !isTrashed_(c); });
   let text = 'ボード名: ' + (board ? board.title : '') + '\n';
   lists.forEach(function (l) {
     text += '\n【' + l.title + '】\n';
@@ -1684,6 +1855,67 @@ function backupStatus() {
     freq: PROP.getProperty('BACKUP_FREQ') || '',
     last: PROP.getProperty('LAST_BACKUP') || '',
     folderUrl: getBackupFolder_().getUrl()
+  };
+}
+
+/* ============================ エクスポート ============================ */
+
+// 全データを1つのオブジェクトで返す。アプリの外に持ち出せる形を用意しておくため
+// （バックアップはスプレッドシートの複製なので、他へ移す手段がこれまで無かった）。
+// CSV への整形はクライアント側で行う（サーバーの実行時間を使わないため）。
+function exportAll() {
+  const ss = getSS_();
+  return {
+    exportedAt: new Date().toISOString(),
+    schemaVersion: SCHEMA_VERSION,
+    boards: sheetObjects_(ss.getSheetByName('Boards')),
+    lists: sheetObjects_(ss.getSheetByName('Lists')),
+    cards: getAllCards(),                 // ゴミ箱の中身は含めない
+    labels: sheetObjects_(ss.getSheetByName('Labels')),
+    fields: sheetObjects_(ss.getSheetByName('Fields')),
+    views: sheetObjects_(ss.getSheetByName('Views')),
+    automations: sheetObjects_(ss.getSheetByName('Automations')),
+    recurring: sheetObjects_(ss.getSheetByName('Recurring'))
+  };
+}
+
+/* ============================ 健康診断 ============================ */
+
+// 「静かに止まる」類の問題を自分で見つけられるようにするための状態まとめ。
+// 2026-08-08に自動バックアップが2か月止まっていたこと、トリガーが1個しか
+// 登録されていなかったことに気づけなかった反省から追加。
+function healthCheck() {
+  const ss = getSS_();
+  const triggers = ScriptApp.getProjectTriggers().map(function (t) {
+    return { fn: t.getHandlerFunction(), source: String(t.getEventType()) };
+  });
+  const cardsAll = sheetObjects_(ss.getSheetByName('Cards'));
+  const bk = backupStatus();
+
+  // 最終バックアップからの経過日数（'yyyy-MM-dd HH:mm' 形式で保存されている）
+  let backupAgeDays = null;
+  if (bk.last) {
+    const d = new Date(String(bk.last).replace(' ', 'T') + ':00');
+    if (!isNaN(d.getTime())) backupAgeDays = Math.floor((Date.now() - d.getTime()) / 86400000);
+  }
+
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    dbUrl: ss.getUrl(),
+    appUrl: ScriptApp.getService().getUrl(),
+    backup: { freq: bk.freq, last: bk.last, ageDays: backupAgeDays, folderUrl: bk.folderUrl },
+    triggers: triggers,
+    counts: {
+      boards: sheetObjects_(ss.getSheetByName('Boards')).length,
+      lists: sheetObjects_(ss.getSheetByName('Lists')).length,
+      cards: cardsAll.filter(function (c) { return !isTrashed_(c); }).length,
+      trash: cardsAll.filter(isTrashed_).length
+    },
+    flags: {
+      geminiKey: !!PROP.getProperty('GEMINI_KEY'),
+      sharing: isSharingEnabled(),
+      apiToken: !!PROP.getProperty('API_TOKEN')
+    }
   };
 }
 

@@ -427,6 +427,87 @@
   .danger-btn { background: #fbeae8; color: #c0392b; border: 0; padding: 8px 14px; border-radius: 6px; cursor: pointer; }
   .danger-btn:hover { background: #f5c6c0; }
 
+  /* ===================== 2026-08-09 追加分のスタイル ===================== */
+
+  /* 今日やること */
+  .today-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px; margin-bottom: 8px;
+    background: #f9fafb; border-left: 5px solid #999; border-radius: 8px; cursor: pointer;
+  }
+  .today-row:hover { background: #eef1f5; }
+  .today-row.overdue { background: #fdf1f0; }
+  .today-row.overdue:hover { background: #fbe3e1; }
+  .today-main { flex: 1 1 auto; min-width: 0; }
+  .today-title { font-weight: 600; font-size: 14px; }
+  .today-meta { font-size: 12px; color: #5e6c84; margin-top: 2px; }
+  .today-row .ghost-btn { flex: 0 0 auto; }
+
+  /* ゴミ箱 */
+  .trash-where { font-size: 11px; color: #5e6c84; margin-left: 8px; }
+
+  /* 健康診断 */
+  .health-row { display: flex; gap: 12px; padding: 7px 10px; border-bottom: 1px solid #eee; font-size: 13px; align-items: baseline; }
+  .health-label { flex: 0 0 150px; color: #5e6c84; }
+  .health-value { flex: 1 1 auto; word-break: break-word; }
+  .health-row.ok .health-value { color: #1e7e34; }
+  .health-row.warn { background: #fff8e6; }
+  .health-row.warn .health-value { color: #a06600; }
+  .health-row.ng { background: #fdf1f0; }
+  .health-row.ng .health-value { color: #c0392b; }
+
+  /* Markdown プレビュー */
+  .md-toggle { float: right; font-weight: 400; }
+  .md-rendered {
+    border: 1px solid #dfe1e6; border-radius: 6px; padding: 10px 12px;
+    font-size: 14px; line-height: 1.7; background: #fbfcfd; min-height: 60px;
+  }
+  .md-rendered h3, .md-rendered h4, .md-rendered h5, .md-rendered h6 { margin: 10px 0 6px; }
+  .md-rendered p { margin: 6px 0; }
+  .md-rendered ul, .md-rendered ol { margin: 6px 0; padding-left: 22px; }
+  .md-rendered code { background: rgba(0,0,0,.06); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+  .md-rendered blockquote { margin: 6px 0; padding: 2px 12px; border-left: 3px solid #dfe1e6; color: #5e6c84; }
+  .md-rendered hr { border: 0; border-top: 1px solid #dfe1e6; margin: 10px 0; }
+  .md-rendered a { color: #0067a3; }
+
+  .theme-btn.active { background: #fff; color: #0067a3; font-weight: 700; }
+
+  /* ===================== ダークテーマ（画面幅によらず適用） =====================
+     スマホは従来どおり下の @media 側で常にダークになる。ここは主にパソコン用。
+     色は既存のスマホ用ダークテーマと揃えてある。 */
+  :root.theme-dark body { background: linear-gradient(135deg, #10233a 0%, #241f3d 100%); }
+  :root.theme-dark #board { background: transparent; }
+  :root.theme-dark .list { background: #1c1c1e; color: #e8eaed; }
+  :root.theme-dark .list-title, :root.theme-dark .list-head { color: #f2f2f7; }
+  :root.theme-dark .card { background: #2a2b2f; color: #e8eaed; box-shadow: 0 1px 2px rgba(0,0,0,.5); }
+  :root.theme-dark .card:hover { background: #33343a; }
+  :root.theme-dark .overlay-inner { background: #1c1c1e; color: #e8eaed; }
+  :root.theme-dark .overlay-title { color: #fff; }
+  :root.theme-dark .modal { background: #1c1c1e; color: #e8eaed; }
+  :root.theme-dark .m-label { color: #9aa0a6; }
+  :root.theme-dark .set-note, :root.theme-dark .today-meta,
+  :root.theme-dark .health-label, :root.theme-dark .trash-where { color: #9aa0a6; }
+  :root.theme-dark input, :root.theme-dark textarea, :root.theme-dark select,
+  :root.theme-dark .add-card-form textarea {
+    background: #2a2b2f; color: #e8eaed; border-color: rgba(255,255,255,.18);
+  }
+  :root.theme-dark input::placeholder, :root.theme-dark textarea::placeholder { color: #7a8085; }
+  :root.theme-dark .ghost-btn.dark { background: rgba(255,255,255,.12); color: #e8eaed; }
+  :root.theme-dark .arch-row, :root.theme-dark .health-row { border-bottom-color: rgba(255,255,255,.1); }
+  :root.theme-dark .today-row { background: #2a2b2f; }
+  :root.theme-dark .today-row:hover { background: #33343a; }
+  :root.theme-dark .today-row.overdue { background: #3a2526; }
+  :root.theme-dark .health-row.warn { background: #3a3320; }
+  :root.theme-dark .health-row.ng { background: #3a2526; }
+  :root.theme-dark .md-rendered { background: #232428; border-color: rgba(255,255,255,.15); }
+  :root.theme-dark .md-rendered code { background: rgba(255,255,255,.12); }
+  :root.theme-dark .md-rendered blockquote { border-left-color: rgba(255,255,255,.2); color: #9aa0a6; }
+  :root.theme-dark .md-rendered a { color: #8ab4f8; }
+  :root.theme-dark .dash-card { background: #2a2b2f; }
+  :root.theme-dark .cal-cell, :root.theme-dark .tl-cell { border-color: rgba(255,255,255,.1); }
+  :root.theme-dark table, :root.theme-dark th, :root.theme-dark td { border-color: rgba(255,255,255,.1); }
+  :root.theme-dark .vt-table th { background: #2a2b2f; color: #e8eaed; }
+
   /* Mobile */
   @media (max-width: 700px) {
     .list { width: 84vw; flex-basis: 84vw; }

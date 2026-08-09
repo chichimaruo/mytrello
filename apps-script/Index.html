@@ -8,6 +8,7 @@
   <header id="topbar">
     <span id="brand">📋</span>
     <button id="homeBtn" class="ghost-btn">🏠 ボード一覧</button>
+    <button id="todayBtn" class="ghost-btn">☀ 今日</button>
     <button id="calBtn" class="ghost-btn">📅 カレンダー</button>
     <button id="tableBtn" class="ghost-btn">📊 テーブル</button>
     <button id="dashBtn" class="ghost-btn">📈 集計</button>
@@ -86,6 +87,28 @@
       </div>
       <p class="set-note">このボードでアーカイブしたカードです。「リストに戻す」で元に戻せます。</p>
       <div id="archList"></div>
+
+      <h3 class="arch-head">🗑 ゴミ箱</h3>
+      <p class="set-note">
+        削除したカードはここに入ります。<b>「元に戻す」で復活できます。</b>
+        全ボード分をまとめて表示しています。「完全に削除」すると添付ファイルもドライブのゴミ箱へ移動し、取り消せません。
+      </p>
+      <div class="set-row">
+        <button id="trashEmptyBtn" class="ghost-btn small dark">ゴミ箱を空にする</button>
+      </div>
+      <div id="trashList"></div>
+    </div>
+  </div>
+
+  <!-- 今日やること（全ボード横断） -->
+  <div id="today" class="overlay hidden">
+    <div class="overlay-inner">
+      <div class="cal-header">
+        <h2 class="overlay-title">☀ 今日やること</h2>
+        <button id="todayClose" class="ghost-btn small dark cal-close">閉じる</button>
+      </div>
+      <p class="set-note">全ボードを横断して、期限が来ているカードを集めています。完了したカードは出ません。</p>
+      <div id="todayBody"></div>
     </div>
   </div>
 
@@ -96,6 +119,37 @@
         <h2 class="overlay-title">設定</h2>
         <button id="setClose" class="ghost-btn small dark cal-close">閉じる</button>
       </div>
+
+      <h3 class="arch-head">🎨 表示テーマ</h3>
+      <p class="set-note">
+        パソコンでもダークテーマを使えます。「自動」は端末の設定に合わせます。
+        ※スマホの細い画面は、これまでどおり常にダーク表示です。
+      </p>
+      <div class="set-row">
+        <button class="ghost-btn small dark theme-btn" data-theme="auto">自動</button>
+        <button class="ghost-btn small dark theme-btn" data-theme="light">ライト</button>
+        <button class="ghost-btn small dark theme-btn" data-theme="dark">ダーク</button>
+      </div>
+
+      <h3 class="arch-head">💾 エクスポート（持ち出し）</h3>
+      <p class="set-note">
+        全データをファイルとして書き出します。バックアップ（スプレッドシートの複製）とは別に、
+        アプリの外でも読める形を手元に残しておけます。
+      </p>
+      <div class="set-row">
+        <button id="exportJsonBtn" class="ghost-btn small dark">JSONで書き出す</button>
+        <button id="exportCsvBtn" class="ghost-btn small dark">カード一覧をCSVで書き出す</button>
+      </div>
+
+      <h3 class="arch-head">🩺 健康診断</h3>
+      <p class="set-note">
+        バックアップやトリガーが止まっていないかを確認します。
+        <b>気づかないうちに止まることがある</b>ので、ときどき開いてください。
+      </p>
+      <div class="set-row">
+        <button id="healthBtn" class="ghost-btn small dark">状態を確認</button>
+      </div>
+      <div id="healthBody"></div>
 
       <h3 class="arch-head">⏰ 期限リマインダー（メール）</h3>
       <p class="set-note">期限が近い／過ぎた未完了カードを、毎朝メールでお知らせします。</p>
@@ -378,8 +432,11 @@
           </div>
 
           <div class="m-section">
-            <label class="m-label">説明</label>
-            <textarea id="m-desc" rows="4" placeholder="詳細メモ..."></textarea>
+            <label class="m-label">説明
+              <button id="m-desc-preview" class="ghost-btn small dark md-toggle" title="Markdown表示に切り替え">👁 プレビュー</button>
+            </label>
+            <textarea id="m-desc" rows="4" placeholder="詳細メモ...（**太字** # 見出し - 箇条書き [リンク](url) が使えます）"></textarea>
+            <div id="m-desc-rendered" class="md-rendered hidden"></div>
           </div>
 
           <div class="m-section">
