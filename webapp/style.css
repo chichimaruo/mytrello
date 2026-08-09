@@ -472,6 +472,58 @@
 
   .theme-btn.active { background: #fff; color: #0067a3; font-weight: 700; }
 
+  /* 週案（時間割グリッド） */
+  .week-wrap { overflow-x: auto; }
+  .week-table { border-collapse: collapse; font-size: 12px; }
+  .week-table th, .week-table td { border: 1px solid #dfe1e6; }
+  .week-th-corner { position: sticky; left: 0; background: #f4f5f7; z-index: 2; min-width: 96px; padding: 6px; }
+  .week-th-day { background: #f4f5f7; padding: 5px; font-weight: 700; }
+  .week-th-day.today { background: #e4f0f6; color: #0067a3; }
+  .week-date { display: block; font-weight: 400; font-size: 11px; color: #5e6c84; }
+  .week-th-period { background: #fafbfc; font-weight: 400; color: #5e6c84; width: 62px; padding: 2px; }
+  .week-th-class { position: sticky; left: 0; background: #fff; z-index: 1; text-align: left; padding: 6px 8px; white-space: nowrap; }
+  .week-cell { height: 42px; vertical-align: top; padding: 2px; }
+  .week-cell.today { background: #f7fbfd; }
+  .week-chip {
+    background: #0079bf; color: #fff; border-radius: 4px; padding: 2px 4px; margin-bottom: 2px;
+    cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px;
+  }
+  .week-chip.done { background: #61bd4f; }
+  .week-chip:hover { filter: brightness(1.1); }
+  .week-add { width: 100%; border: 0; background: transparent; color: #b3bac5; cursor: pointer; font-size: 13px; }
+  .week-cell:hover .week-add { color: #0079bf; }
+
+  /* 進度 */
+  .prog-row { display: flex; align-items: center; gap: 10px; padding: 5px 0; font-size: 13px; }
+  .prog-name { flex: 0 0 110px; }
+  .prog-bar { flex: 1 1 auto; height: 10px; background: #eceef1; border-radius: 5px; overflow: hidden; }
+  .prog-fill { height: 100%; background: #61bd4f; }
+  .prog-num { flex: 0 0 150px; text-align: right; color: #5e6c84; font-size: 12px; }
+  .prog-num .behind { color: #c0392b; }
+
+  /* 変更履歴 */
+  .hist-row { border-bottom: 1px solid #eee; padding: 7px 0; font-size: 12px; }
+  .hist-when { color: #5e6c84; }
+  .hist-diff { margin: 3px 0; word-break: break-word; }
+  .hist-before { color: #c0392b; text-decoration: line-through; }
+  .hist-after { color: #1e7e34; }
+
+  /* まとめて操作 */
+  .bulk-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-bottom: 1px solid #eee; }
+  .bulk-chk { margin-top: 3px; flex: 0 0 auto; }
+  .bulk-main { flex: 1 1 auto; min-width: 0; }
+  .bulk-title { font-weight: 600; font-size: 13px; }
+  .bulk-change { font-size: 12px; margin-top: 2px; }
+  .bulk-reason { font-size: 11px; color: #5e6c84; margin-top: 2px; }
+
+  /* 意味で探す */
+  .sem-row { display: flex; gap: 10px; align-items: center; padding: 8px 6px; border-bottom: 1px solid #eee; cursor: pointer; }
+  .sem-row:hover { background: #f4f5f7; }
+  .sem-score { flex: 0 0 46px; text-align: right; color: #0067a3; font-weight: 700; font-size: 12px; }
+  .sem-main { flex: 1 1 auto; min-width: 0; }
+  .sem-title { font-weight: 600; font-size: 13px; }
+  .sem-meta { font-size: 11px; color: #5e6c84; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
   /* ===================== ダークテーマ（画面幅によらず適用） =====================
      スマホは従来どおり下の @media 側で常にダークになる。ここは主にパソコン用。
      色は既存のスマホ用ダークテーマと揃えてある。 */
@@ -507,6 +559,19 @@
   :root.theme-dark .cal-cell, :root.theme-dark .tl-cell { border-color: rgba(255,255,255,.1); }
   :root.theme-dark table, :root.theme-dark th, :root.theme-dark td { border-color: rgba(255,255,255,.1); }
   :root.theme-dark .vt-table th { background: #2a2b2f; color: #e8eaed; }
+  :root.theme-dark .week-table th, :root.theme-dark .week-table td { border-color: rgba(255,255,255,.12); }
+  :root.theme-dark .week-th-corner, :root.theme-dark .week-th-day { background: #2a2b2f; color: #e8eaed; }
+  :root.theme-dark .week-th-period { background: #232428; color: #9aa0a6; }
+  :root.theme-dark .week-th-class { background: #1c1c1e; color: #e8eaed; }
+  :root.theme-dark .week-cell.today { background: rgba(255,255,255,.04); }
+  :root.theme-dark .week-date, :root.theme-dark .prog-num,
+  :root.theme-dark .hist-when, :root.theme-dark .bulk-reason, :root.theme-dark .sem-meta { color: #9aa0a6; }
+  :root.theme-dark .prog-bar { background: rgba(255,255,255,.15); }
+  :root.theme-dark .hist-row, :root.theme-dark .bulk-row, :root.theme-dark .sem-row { border-bottom-color: rgba(255,255,255,.1); }
+  :root.theme-dark .sem-row:hover { background: #2a2b2f; }
+  :root.theme-dark .hist-before { color: #f28b82; }
+  :root.theme-dark .hist-after { color: #81c995; }
+  :root.theme-dark .sem-score { color: #8ab4f8; }
 
   /* Mobile */
   @media (max-width: 700px) {

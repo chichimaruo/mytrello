@@ -13,12 +13,13 @@ const SCHEMA = {
   Lists:  ['id', 'title', 'position', 'archived', 'boardId', 'wip', 'collapsed'],
   Cards:  ['id', 'listId', 'title', 'desc', 'position', 'labels',
            'due', 'checklist', 'comments', 'createdAt', 'updatedAt', 'archived',
-           'attachments', 'start', 'allDay', 'done', 'ratings', 'fields', 'cover', 'template', 'links', 'sync', 'places', 'deleted'],
+           'attachments', 'start', 'allDay', 'done', 'ratings', 'fields', 'cover', 'template', 'links', 'sync', 'places', 'deleted', 'klass', 'period', 'embedding', 'embHash'],
   Labels: ['id', 'name', 'color', 'boardId'],
   Fields: ['id', 'boardId', 'name', 'type', 'config', 'position', 'showFront'],
   Views: ['id', 'name', 'config', 'position'],
   Automations: ['id', 'boardId', 'triggerList', 'actions', 'position'],
-  Recurring: ['id', 'boardId', 'listId', 'title', 'freq', 'lastRun', 'position']
+  Recurring: ['id', 'boardId', 'listId', 'title', 'freq', 'lastRun', 'position'],
+  History: ['id', 'cardId', 'at', 'field', 'before', 'after']
 };
 
 const DEFAULT_LABELS = [
@@ -65,6 +66,12 @@ const API_ALLOWED = {
   getInitial: 1, getState: 1, getMeta: 1, getCards: 1, getAllCards: 1,
   getTrash: 1, restoreCard: 1, purgeCard: 1, emptyTrash: 1,
   exportAll: 1, healthCheck: 1, copyBoard: 1,
+  getCardHistory: 1, revertHistory: 1,
+  getClasses: 1, setClasses: 1,
+  gmailImportStatus: 1, enableGmailImport: 1, disableGmailImport: 1, importGmailNow: 1,
+  aiReviewStatus: 1, enableAiReview: 1, disableAiReview: 1, aiWeeklyReview: 1,
+  aiPlanBulk: 1, aiApplyBulk: 1,
+  reindexEmbeddings: 1, semanticSearch: 1,
   addBoard: 1, renameBoard: 1, deleteBoard: 1, archiveBoard: 1, setBoardBackground: 1,
   addList: 1, renameList: 1, deleteList: 1, archiveList: 1, copyList: 1,
   archiveAllCards: 1, setListWip: 1, setListCollapsed: 1, setAllListsCollapsed: 1, saveListOrder: 1,
@@ -169,7 +176,7 @@ function ensureColumn_(sheet, colName, defaultVal) {
   }
 }
 
-const SCHEMA_VERSION = '18';
+const SCHEMA_VERSION = '19';
 
 function ensureSchema_(ss) {
   if (PROP.getProperty('SCHEMA_V') === SCHEMA_VERSION) return;
@@ -286,6 +293,17 @@ function ensureSchema_(ss) {
 
   // v18: ゴミ箱（削除を取り消せるようにする論理削除フラグ）
   ensureColumn_(ss.getSheetByName('Cards'), 'deleted', false);
+
+  // v19: 週案（クラス・時限）／意味検索の埋め込み／変更履歴
+  ensureColumn_(ss.getSheetByName('Cards'), 'klass', '');
+  ensureColumn_(ss.getSheetByName('Cards'), 'period', 0);
+  ensureColumn_(ss.getSheetByName('Cards'), 'embedding', '');
+  ensureColumn_(ss.getSheetByName('Cards'), 'embHash', '');
+  if (!ss.getSheetByName('History')) {
+    const h = ss.insertSheet('History');
+    h.getRange(1, 1, 1, SCHEMA.History.length).setValues([SCHEMA.History]);
+    h.setFrozenRows(1);
+  }
 
   // v7: 汎用カスタムフィールド（ボードごと）
   ensureColumn_(ss.getSheetByName('Cards'), 'fields', '{}');
@@ -462,6 +480,10 @@ function parseCard_(c) {
   c.sync        = parseJson_(c.sync, {});
   c.places      = parseJson_(c.places, []);
   c.deleted     = c.deleted === true || c.deleted === 'TRUE';
+  c.klass       = c.klass === undefined || c.klass === null ? '' : String(c.klass);
+  c.period      = Number(c.period) || 0;
+  delete c.embedding;  // 埋め込みは重いのでクライアントへ送らない
+  delete c.embHash;
   c.start       = toYmd_(c.start);
   c.due         = toYmd_(c.due);
   c.position    = Number(c.position) || 0;
@@ -804,7 +826,7 @@ function addCard(listId, title) {
       id: Utilities.getUuid(), listId: listId, title: title, desc: '',
       position: maxPos + 1, labels: '[]', due: '', checklist: '[]',
       comments: '[]', createdAt: now, updatedAt: now, archived: false,
-      attachments: '[]', start: '', allDay: true, done: false, ratings: '{}', fields: '{}', cover: '', template: false, links: '[]', sync: '{}', places: '[]', deleted: false
+      attachments: '[]', start: '', allDay: true, done: false, ratings: '{}', fields: '{}', cover: '', template: false, links: '[]', sync: '{}', places: '[]', deleted: false, klass: '', period: 0, embedding: '', embHash: ''
     };
     sh.appendRow(rowFromObject_('Cards', card));
     return card;
@@ -820,7 +842,13 @@ function updateCard(id, fields) {
     const colIndex = {};
     SCHEMA.Cards.forEach(function (k, i) { colIndex[k] = i + 1; });
 
-    ['title', 'desc', 'due', 'start', 'allDay', 'done', 'archived', 'template'].forEach(function (k) {
+    // 履歴に残す項目は、変更前の値を先に読んでおく
+    const before = {};
+    HISTORY_FIELDS.forEach(function (k) {
+      if (fields[k] !== undefined) before[k] = sh.getRange(row, colIndex[k]).getValue();
+    });
+
+    ['title', 'desc', 'due', 'start', 'allDay', 'done', 'archived', 'template', 'klass', 'period'].forEach(function (k) {
       if (fields[k] !== undefined) sh.getRange(row, colIndex[k]).setValue(fields[k]);
     });
     ['labels', 'checklist', 'comments', 'fields', 'cover', 'links', 'places'].forEach(function (k) {
@@ -829,8 +857,74 @@ function updateCard(id, fields) {
       }
     });
     sh.getRange(row, colIndex['updatedAt']).setValue(new Date().toISOString());
+
+    // 内容が変わったので、意味検索の埋め込みは作り直しが必要（次回の再計算で拾わせる）
+    if (fields.title !== undefined || fields.desc !== undefined) {
+      sh.getRange(row, colIndex['embHash']).setValue('');
+    }
+
+    recordHistory_(id, before, fields);
     return true;
   });
+}
+
+/* ============================ 変更履歴 / 巻き戻し ============================ */
+
+// 履歴を残す項目。全部残すと重くなるので、後から戻したくなるものだけ。
+const HISTORY_FIELDS = ['title', 'desc', 'due', 'start', 'done', 'archived', 'klass', 'period'];
+const HISTORY_MAX = 2000;   // これを超えたら古い方から捨てる
+
+function histText_(v) {
+  if (v === null || v === undefined) return '';
+  if (Object.prototype.toString.call(v) === '[object Date]') return toYmd_(v);
+  return String(v);
+}
+
+// updateCard の中から呼ばれる。値が実際に変わった項目だけ1行ずつ積む。
+function recordHistory_(cardId, before, fields) {
+  try {
+    const rows = [];
+    const at = new Date().toISOString();
+    HISTORY_FIELDS.forEach(function (k) {
+      if (fields[k] === undefined) return;
+      const b = histText_(before[k]);
+      const a = histText_(fields[k]);
+      if (b === a) return;                       // 変わっていないなら残さない
+      rows.push({ id: Utilities.getUuid(), cardId: cardId, at: at, field: k,
+                  before: b.slice(0, 2000), after: a.slice(0, 2000) });
+    });
+    if (!rows.length) return;
+    const sh = getSS_().getSheetByName('History');
+    if (!sh) return;
+    appendRows_(sh, 'History', rows);
+    // 上限を超えたぶんを古い方から削除
+    const over = sh.getLastRow() - 1 - HISTORY_MAX;
+    if (over > 0) sh.deleteRows(2, over);
+  } catch (e) { /* 履歴で本体の保存を失敗させない */ }
+}
+
+// カード1枚の履歴（新しい順）
+function getCardHistory(cardId) {
+  const sh = getSS_().getSheetByName('History');
+  if (!sh) return [];
+  return sheetObjects_(sh)
+    .filter(function (h) { return h.cardId === cardId; })
+    .sort(function (a, b) { return String(b.at).localeCompare(String(a.at)); })
+    .slice(0, 100);
+}
+
+// 履歴1件の「変更前」の値へ戻す（戻した操作自体も履歴に残る）
+function revertHistory(historyId) {
+  const sh = getSS_().getSheetByName('History');
+  if (!sh) return false;
+  const h = sheetObjects_(sh).filter(function (x) { return x.id === historyId; })[0];
+  if (!h) return false;
+  const val = (h.field === 'done' || h.field === 'archived')
+    ? (String(h.before) === 'true' || String(h.before) === 'TRUE')
+    : (h.field === 'period' ? (Number(h.before) || 0) : h.before);
+  const patch = {}; patch[h.field] = val;
+  updateCard(h.cardId, patch);
+  return true;
 }
 
 // 添付ファイル(JSON文字列)に含まれるDriveファイルをゴミ箱へ
@@ -1917,6 +2011,327 @@ function healthCheck() {
       apiToken: !!PROP.getProperty('API_TOKEN')
     }
   };
+}
+
+/* ============================ 週案（クラス設定） ============================ */
+// クラス名の一覧。週案ビューの行になる。1人で使う前提なので全体で1つ持つ。
+function getClasses() { return parseJson_(PROP.getProperty('CLASSES'), []); }
+function setClasses(list) {
+  const arr = (list || []).map(function (s) { return String(s).trim(); }).filter(Boolean);
+  PROP.setProperty('CLASSES', JSON.stringify(arr));
+  return arr;
+}
+
+/* ============================ Gmail から取り込む ============================ */
+// 指定ラベルの付いたスレッドをカードにする。取り込んだらラベルを外し、
+// 代わりに「MyTrello済み」を付けるので二重取り込みは起きない。
+
+const GMAIL_DONE_LABEL = 'MyTrello済み';
+
+function gmailImportStatus() {
+  return {
+    label: PROP.getProperty('GMAIL_LABEL') || '',
+    listId: PROP.getProperty('GMAIL_LIST') || '',
+    last: PROP.getProperty('GMAIL_LAST') || '',
+    on: !!PROP.getProperty('GMAIL_LABEL') &&
+        ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === 'importGmailNow'; })
+  };
+}
+
+function enableGmailImport(labelName, listId) {
+  const name = String(labelName || '').trim();
+  if (!name) throw new Error('Gmailのラベル名を入れてください');
+  if (!listId) throw new Error('取り込み先のリストを選んでください');
+  if (!GmailApp.getUserLabelByName(name)) {
+    throw new Error('Gmailに「' + name + '」というラベルが見つかりません。先にGmailで作ってください。');
+  }
+  PROP.setProperty('GMAIL_LABEL', name);
+  PROP.setProperty('GMAIL_LIST', listId);
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'importGmailNow') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('importGmailNow').timeBased().everyHours(1).create();
+  return true;
+}
+
+function disableGmailImport() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'importGmailNow') ScriptApp.deleteTrigger(t);
+  });
+  PROP.deleteProperty('GMAIL_LABEL');
+  return true;
+}
+
+function importGmailNow() {
+  const name = PROP.getProperty('GMAIL_LABEL');
+  const listId = PROP.getProperty('GMAIL_LIST');
+  if (!name || !listId) return { added: 0, reason: '未設定' };
+
+  const src = GmailApp.getUserLabelByName(name);
+  if (!src) return { added: 0, reason: 'ラベルが見つかりません' };
+  let done = GmailApp.getUserLabelByName(GMAIL_DONE_LABEL) || GmailApp.createLabel(GMAIL_DONE_LABEL);
+
+  const threads = src.getThreads(0, 20);   // 1回あたり20件まで（実行時間の上限対策）
+  let added = 0;
+  threads.forEach(function (th) {
+    const msgs = th.getMessages();
+    const first = msgs[0];
+    const title = (th.getFirstMessageSubject() || '(件名なし)').slice(0, 200);
+    const body = msgs.map(function (m) {
+      return '── ' + m.getFrom() + '  ' + Utilities.formatDate(m.getDate(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm') + '\n'
+        + (m.getPlainBody() || '').slice(0, 3000);
+    }).join('\n\n');
+    const link = 'https://mail.google.com/mail/u/0/#all/' + th.getId();
+
+    const card = addCard(listId, title);
+    updateCard(card.id, {
+      desc: body + '\n\n' + link,
+      links: [link],
+      start: toYmd_(first.getDate())
+    });
+    th.removeLabel(src);
+    th.addLabel(done);
+    added++;
+  });
+
+  PROP.setProperty('GMAIL_LAST', Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm'));
+  return { added: added };
+}
+
+/* ============================ AI：週次の棚卸し ============================ */
+// 毎週トリガーで盤面全体をGeminiに読ませ、気づきを「提案カード」として置く。
+// 勝手に既存カードを書き換えることはしない（提案するだけ）。
+
+function aiReviewStatus() {
+  return {
+    listId: PROP.getProperty('AIREVIEW_LIST') || '',
+    last: PROP.getProperty('AIREVIEW_LAST') || '',
+    on: ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === 'aiWeeklyReview'; })
+  };
+}
+
+function enableAiReview(listId) {
+  if (!listId) throw new Error('提案の置き場所になるリストを選んでください');
+  PROP.setProperty('AIREVIEW_LIST', listId);
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'aiWeeklyReview') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('aiWeeklyReview').timeBased().onWeekDay(ScriptApp.WeekDay.SUNDAY).atHour(20).create();
+  return true;
+}
+
+function disableAiReview() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'aiWeeklyReview') ScriptApp.deleteTrigger(t);
+  });
+  return true;
+}
+
+// 盤面をAIに渡せる短いテキストにまとめる（トークンを使いすぎないよう要点だけ）
+function boardDigest_() {
+  const ss = getSS_();
+  const boards = sheetObjects_(ss.getSheetByName('Boards')).filter(function (b) { return !(b.archived === true || b.archived === 'TRUE'); });
+  const lists = sheetObjects_(ss.getSheetByName('Lists')).filter(function (l) { return !(l.archived === true || l.archived === 'TRUE'); });
+  const cards = getAllCards().filter(function (c) { return !c.archived && !c.template; });
+  const listMap = {}; lists.forEach(function (l) { listMap[l.id] = l; });
+  const boardMap = {}; boards.forEach(function (b) { boardMap[b.id] = b; });
+  const today = toYmd_(new Date());
+
+  const rows = cards.slice(0, 400).map(function (c) {
+    const l = listMap[c.listId]; if (!l) return null;
+    const b = boardMap[l.boardId]; if (!b) return null;
+    return [c.id, b.title, l.title, c.title,
+            c.start || '-', c.due || '-', c.done ? '完了' : '未完了',
+            '更新:' + String(c.updatedAt || '').slice(0, 10)].join(' | ');
+  }).filter(Boolean);
+
+  return '今日は ' + today + ' です。\n'
+    + '書式: カードID | ボード | リスト | タイトル | 開始 | 期限 | 状態 | 最終更新\n'
+    + rows.join('\n');
+}
+
+function aiWeeklyReview() {
+  const listId = PROP.getProperty('AIREVIEW_LIST');
+  if (!listId) return { added: 0, reason: '未設定' };
+
+  const prompt = 'あなたは私専属の進行管理アシスタントです。以下のかんばんの全カードを読み、'
+    + '気づいた点を最大8件、日本語のJSON配列だけで返してください。\n'
+    + '形式: [{"type":"放置|矛盾|重複|着手時期","title":"40字以内の要点","detail":"なぜそう思うかを120字以内"}]\n'
+    + '観点: (1)長く更新が無く忘れられていそうなもの (2)日付の矛盾（開始が期限より後、期限切れなのに未完了で放置）'
+    + ' (3)実質同じ内容が複数枚に分かれているもの (4)期限から逆算してそろそろ着手すべきもの。\n'
+    + '重要でないものは無理に挙げない。JSON以外は一切出力しない。\n\n' + boardDigest_();
+
+  let items = [];
+  try {
+    items = JSON.parse(aiCallGemini_(prompt).replace(/```json|```/g, '').trim());
+  } catch (e) {
+    return { added: 0, reason: 'AIの返答を解釈できませんでした' };
+  }
+  if (!Array.isArray(items) || !items.length) {
+    PROP.setProperty('AIREVIEW_LAST', Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm'));
+    return { added: 0 };
+  }
+
+  const stamp = toYmd_(new Date());
+  let added = 0;
+  items.slice(0, 8).forEach(function (it) {
+    if (!it || !it.title) return;
+    const card = addCard(listId, '🤖 ' + (it.type || '気づき') + '：' + String(it.title).slice(0, 60));
+    updateCard(card.id, { desc: String(it.detail || '') + '\n\n（' + stamp + ' のAI棚卸しによる提案です。対応したら削除してください）' });
+    added++;
+  });
+  PROP.setProperty('AIREVIEW_LAST', Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm'));
+  return { added: added };
+}
+
+/* ============================ AI：自然文でまとめて操作 ============================ */
+// 危険な操作なので「案を作る」と「実行する」を必ず分ける。
+// aiPlanBulk は何も変更しない。aiApplyBulk は画面で承認された案だけを受け取る。
+
+function aiPlanBulk(instruction) {
+  const text = String(instruction || '').trim();
+  if (!text) throw new Error('指示を入力してください');
+
+  const prompt = 'あなたはかんばんアプリの操作を提案するアシスタントです。'
+    + '次の指示を実行するために変更すべきカードを選び、日本語のJSONだけで返してください。\n'
+    + '形式: {"actions":[{"cardId":"...","title":"対象カードのタイトル","change":{"due":"YYYY-MM-DD"},"reason":"20字以内"}]}\n'
+    + 'changeに使ってよいキーは due, start, done, archived, title のみ。'
+    + '日付は必ず YYYY-MM-DD。doneとarchivedは true/false。\n'
+    + '確信が持てないカードは含めない。該当が無ければ {"actions":[]} を返す。'
+    + '最大30件。JSON以外は一切出力しない。\n\n指示: ' + text + '\n\n' + boardDigest_();
+
+  let plan = { actions: [] };
+  try { plan = JSON.parse(aiCallGemini_(prompt).replace(/```json|```/g, '').trim()); } catch (e) {
+    throw new Error('AIの返答を解釈できませんでした。指示を短く区切って試してください。');
+  }
+  const allowed = { due: 1, start: 1, done: 1, archived: 1, title: 1 };
+  const cards = {}; getAllCards().forEach(function (c) { cards[c.id] = c; });
+
+  // 実在するカードと、許可したキーだけに絞る（AIの取り違えをここで止める）
+  const actions = (plan.actions || []).filter(function (a) { return a && cards[a.cardId]; }).slice(0, 30)
+    .map(function (a) {
+      const ch = {};
+      Object.keys(a.change || {}).forEach(function (k) { if (allowed[k]) ch[k] = a.change[k]; });
+      const cur = cards[a.cardId];
+      return {
+        cardId: a.cardId, title: cur.title, reason: String(a.reason || ''),
+        change: ch,
+        before: { due: cur.due || '', start: cur.start || '', done: !!cur.done, archived: !!cur.archived, title: cur.title }
+      };
+    })
+    .filter(function (a) { return Object.keys(a.change).length; });
+
+  return { actions: actions };
+}
+
+// 画面で承認された案をそのまま実行する。履歴に残るので後から個別に戻せる。
+function aiApplyBulk(actions) {
+  const allowed = { due: 1, start: 1, done: 1, archived: 1, title: 1 };
+  let n = 0;
+  (actions || []).forEach(function (a) {
+    if (!a || !a.cardId || !a.change) return;
+    const ch = {};
+    Object.keys(a.change).forEach(function (k) { if (allowed[k]) ch[k] = a.change[k]; });
+    if (!Object.keys(ch).length) return;
+    updateCard(a.cardId, ch);
+    n++;
+  });
+  return n;
+}
+
+/* ============================ 意味で探す検索 ============================ */
+// Geminiの埋め込みでカードをベクトル化し、言い回しが違っても意味が近ければ見つかるようにする。
+// 埋め込みは embHash（対象テキストのハッシュ）で差分だけ再計算する。
+
+function embedText_(text) {
+  const key = PROP.getProperty('GEMINI_KEY');
+  if (!key) throw new Error('Gemini APIキーが未設定です');
+  const url = 'https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=' + encodeURIComponent(key);
+  const res = UrlFetchApp.fetch(url, {
+    method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+    payload: JSON.stringify({
+      model: 'models/text-embedding-004',
+      content: { parts: [{ text: String(text).slice(0, 8000) }] }
+    })
+  });
+  if (res.getResponseCode() !== 200) throw new Error('埋め込みの取得に失敗: ' + res.getContentText().slice(0, 200));
+  const data = JSON.parse(res.getContentText());
+  return (data.embedding && data.embedding.values) ? data.embedding.values : null;
+}
+
+function hashText_(s) {
+  const bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, String(s), Utilities.Charset.UTF_8);
+  return bytes.map(function (b) { return ((b & 0xff) + 0x100).toString(16).slice(1); }).join('');
+}
+
+function cardEmbedSource_(c) { return String(c.title || '') + '\n' + String(c.desc || ''); }
+
+// 未計算のカードだけ埋め込みを作る。1回の実行で batch 件まで（実行時間の上限対策）。
+// 残りがある間は画面から繰り返し呼ぶ。
+function reindexEmbeddings(batch) {
+  const n = Math.max(1, Math.min(Number(batch) || 25, 50));
+  const sh = getSS_().getSheetByName('Cards');
+  const colIndex = {}; SCHEMA.Cards.forEach(function (k, i) { colIndex[k] = i + 1; });
+  const all = sheetObjects_(sh);
+
+  const todo = all.filter(function (c) {
+    if (isTrashed_(c)) return false;
+    return String(c.embHash || '') !== hashText_(cardEmbedSource_(c));
+  });
+
+  let done = 0;
+  todo.slice(0, n).forEach(function (c) {
+    const row = findRow_(sh, c.id);
+    if (row < 0) return;
+    const src = cardEmbedSource_(c);
+    try {
+      const v = embedText_(src);
+      if (!v) return;
+      // 小数を丸めてセルを軽くする（検索精度にはほぼ影響しない）
+      sh.getRange(row, colIndex['embedding']).setValue(JSON.stringify(v.map(function (x) { return Math.round(x * 10000) / 10000; })));
+      sh.getRange(row, colIndex['embHash']).setValue(hashText_(src));
+      done++;
+    } catch (e) { /* 1枚失敗しても続ける */ }
+  });
+
+  return { done: done, remaining: Math.max(0, todo.length - done), total: all.length };
+}
+
+function semanticSearch(query, topN) {
+  const q = String(query || '').trim();
+  if (!q) return [];
+  const qv = embedText_(q);
+  if (!qv) return [];
+
+  const ss = getSS_();
+  const lists = sheetObjects_(ss.getSheetByName('Lists'));
+  const boards = sheetObjects_(ss.getSheetByName('Boards'));
+  const listMap = {}; lists.forEach(function (l) { listMap[l.id] = l; });
+  const boardMap = {}; boards.forEach(function (b) { boardMap[b.id] = b; });
+
+  // クエリ側のノルム（各カードごとに計算し直さないよう先に出す）
+  let qn = 0; for (let i = 0; i < qv.length; i++) qn += qv[i] * qv[i];
+  qn = Math.sqrt(qn) || 1;
+
+  const scored = [];
+  sheetObjects_(ss.getSheetByName('Cards')).forEach(function (c) {
+    if (isTrashed_(c) || !c.embedding) return;
+    const v = parseJson_(c.embedding, null);
+    if (!v || v.length !== qv.length) return;
+    let dot = 0, vn = 0;
+    for (let i = 0; i < v.length; i++) { dot += qv[i] * v[i]; vn += v[i] * v[i]; }
+    vn = Math.sqrt(vn) || 1;
+    const l = listMap[c.listId]; const b = l ? boardMap[l.boardId] : null;
+    scored.push({
+      id: c.id, title: c.title,
+      desc: String(c.desc || '').slice(0, 120),
+      boardId: b ? b.id : '', boardTitle: b ? b.title : '', listTitle: l ? l.title : '',
+      score: dot / (qn * vn)
+    });
+  });
+
+  scored.sort(function (a, b) { return b.score - a.score; });
+  return scored.slice(0, Math.max(1, Math.min(Number(topN) || 20, 50)));
 }
 
 /* ============================ Utility / 復旧 ============================ */

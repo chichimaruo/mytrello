@@ -346,6 +346,8 @@ function showSettings() {
   renderRecurList();
   loadShareSection();
   loadBackupStatus();
+  refreshGmailStatus();
+  loadClasses().then(function (ks) { $('#classList').value = ks.join('、'); });
   document.getElementById('settings').classList.remove('hidden');
 }
 function hideSettings() { document.getElementById('settings').classList.add('hidden'); }
@@ -1303,6 +1305,8 @@ function renderModal() {
   $('#m-gcal').checked = !!(card.sync && card.sync.gcal);
   $('#m-gtask').checked = !!(card.sync && card.sync.gtask);
   $('#m-sync-status').textContent = '';
+  renderKlassPeriod(card);
+  $('#m-history').innerHTML = '';   // 開くたび畳んでおく（重いので押されたときだけ読む）
   renderCover(card);
 
   // ラベル（このボードのもの＋全ボード共通）
@@ -2302,6 +2306,8 @@ function showAI() {
     .sort(function (a, b) { return a.position - b.position; })
     .forEach(function (l) { const o = document.createElement('option'); o.value = l.id; o.textContent = l.title; sel.appendChild(o); });
   $('#aiAddResult').textContent = ''; $('#aiSumResult').textContent = '';
+  $('#semResult').innerHTML = ''; $('#bulkPlan').innerHTML = ''; $('#semIndexStatus').textContent = '';
+  refreshAiReviewStatus();
   $('#ai').classList.remove('hidden');
 }
 function hideAI() { $('#ai').classList.add('hidden'); }
@@ -3023,6 +3029,372 @@ async function handleShareTarget() {
   return true;
 }
 
+/* ========================================================================
+   ここから下は 2026-08-09（第2弾）
+   週案ビュー / 変更履歴 / Gmail取り込み / AI棚卸し / 自然文一括操作 / 意味検索
+   ======================================================================== */
+
+let CLASSES = [];            // 週案の行になるクラス名
+const PERIODS = [1, 2, 3, 4, 5, 6];
+const WDAY = ['日', '月', '火', '水', '木', '金', '土'];
+let weekRef = new Date();    // 週案が表示している週のどこかの日付
+
+async function loadClasses() {
+  try { CLASSES = await api.getClasses(); } catch (e) { CLASSES = []; }
+  return CLASSES;
+}
+
+// その週の月曜日
+function mondayOf(d) {
+  const x = new Date(d); x.setHours(0, 0, 0, 0);
+  const w = x.getDay();                 // 0=日
+  x.setDate(x.getDate() - ((w + 6) % 7));
+  return x;
+}
+
+/* --------------------------- 週案ビュー --------------------------- */
+function hideWeek() { $('#week').classList.add('hidden'); }
+
+async function showWeek() {
+  $('#week').classList.remove('hidden');
+  $('#weekBody').innerHTML = '<div class="set-note">読み込み中...</div>';
+  await loadClasses();
+  try { await ensureAllCards(); } catch (e) {}
+  renderWeek();
+}
+
+function renderWeek() {
+  const body = $('#weekBody'); body.innerHTML = '';
+  const mon = mondayOf(weekRef);
+  const days = [];
+  for (let i = 0; i < 5; i++) { const d = new Date(mon); d.setDate(mon.getDate() + i); days.push(d); }
+  $('#weekTitle').textContent = '週案 ' + (mon.getMonth() + 1) + '/' + mon.getDate() + ' の週';
+
+  if (!CLASSES.length) {
+    body.appendChild(el('div', 'set-note',
+      'クラスがまだ設定されていません。⚙設定 →「🗓 週案のクラス」で登録してください。'));
+    $('#weekProgress').innerHTML = '';
+    return;
+  }
+
+  const dayStrs = days.map(ymd);
+  // この週・このボードの授業カードを (日付, 時限, クラス) で引けるようにする
+  const slot = {};
+  STATE.cards.forEach(function (c) {
+    if (c.archived || !c.klass || !c.period) return;
+    const d = c.start || c.due; if (!d) return;
+    if (dayStrs.indexOf(d) < 0) return;
+    const l = STATE.lists.find(function (x) { return x.id === c.listId; });
+    if (!l || l.boardId !== currentBoardId) return;
+    (slot[d + '|' + c.period + '|' + c.klass] = slot[d + '|' + c.period + '|' + c.klass] || []).push(c);
+  });
+
+  const table = el('table', 'week-table');
+  const thead = el('thead'); const hr = el('tr');
+  hr.appendChild(el('th', 'week-th-corner', 'クラス'));
+  days.forEach(function (d) {
+    const th = el('th', 'week-th-day' + (ymd(d) === ymd(new Date()) ? ' today' : ''));
+    th.innerHTML = WDAY[d.getDay()] + '<span class="week-date">' + (d.getMonth() + 1) + '/' + d.getDate() + '</span>';
+    th.colSpan = PERIODS.length;
+    hr.appendChild(th);
+  });
+  thead.appendChild(hr);
+
+  const hr2 = el('tr');
+  hr2.appendChild(el('th', 'week-th-corner', ''));
+  days.forEach(function () {
+    PERIODS.forEach(function (p) { hr2.appendChild(el('th', 'week-th-period', String(p))); });
+  });
+  thead.appendChild(hr2);
+  table.appendChild(thead);
+
+  const tbody = el('tbody');
+  CLASSES.forEach(function (k) {
+    const tr = el('tr');
+    tr.appendChild(el('th', 'week-th-class', esc(k)));
+    days.forEach(function (d) {
+      const ds = ymd(d);
+      PERIODS.forEach(function (p) {
+        const td = el('td', 'week-cell' + (ds === ymd(new Date()) ? ' today' : ''));
+        const here = slot[ds + '|' + p + '|' + k] || [];
+        here.forEach(function (c) {
+          const chip = el('div', 'week-chip' + (c.done ? ' done' : ''), esc(c.title));
+          chip.title = c.title;
+          chip.addEventListener('click', function () { hideWeek(); openModal(c.id); });
+          td.appendChild(chip);
+        });
+        if (!here.length) {
+          const add = el('button', 'week-add', '＋');
+          add.title = k + ' ' + (d.getMonth() + 1) + '/' + d.getDate() + ' ' + p + '限';
+          add.addEventListener('click', function () { addLessonCard(k, ds, p); });
+          td.appendChild(add);
+        }
+        tr.appendChild(td);
+      });
+    });
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  body.appendChild(table);
+
+  renderWeekProgress();
+}
+
+// クラスごとの進度差（同じタイトルの授業が、どのクラスで何回済んでいるか）
+function renderWeekProgress() {
+  const box = $('#weekProgress'); box.innerHTML = '';
+  if (!CLASSES.length) return;
+
+  const listIds = {};
+  STATE.lists.forEach(function (l) { if (l.boardId === currentBoardId) listIds[l.id] = 1; });
+  const counts = {};   // クラス → {done, total, last}
+  CLASSES.forEach(function (k) { counts[k] = { done: 0, total: 0, last: '' }; });
+
+  STATE.cards.forEach(function (c) {
+    if (c.archived || !c.klass || !listIds[c.listId]) return;
+    if (!counts[c.klass]) return;
+    counts[c.klass].total++;
+    if (c.done) {
+      counts[c.klass].done++;
+      const d = c.start || c.due || '';
+      if (d > counts[c.klass].last) counts[c.klass].last = d;
+    }
+  });
+
+  const any = CLASSES.some(function (k) { return counts[k].total > 0; });
+  if (!any) return;
+
+  box.appendChild(el('h3', 'arch-head', 'クラスごとの進度'));
+  const maxDone = CLASSES.reduce(function (m, k) { return Math.max(m, counts[k].done); }, 0);
+  CLASSES.forEach(function (k) {
+    const c = counts[k];
+    const row = el('div', 'prog-row');
+    row.appendChild(el('span', 'prog-name', esc(k)));
+    const bar = el('div', 'prog-bar');
+    const fill = el('div', 'prog-fill');
+    fill.style.width = (c.total ? Math.round(c.done / c.total * 100) : 0) + '%';
+    bar.appendChild(fill);
+    row.appendChild(bar);
+    const behind = maxDone - c.done;
+    row.appendChild(el('span', 'prog-num',
+      c.done + ' / ' + c.total + ' 時' + (behind > 0 ? '　<b class="behind">' + behind + '時 遅れ</b>' : '')));
+    box.appendChild(row);
+  });
+}
+
+async function addLessonCard(klass, dateStr, period) {
+  const lists = boardLists();
+  if (!lists.length) { alert('先にリストを作ってください。'); return; }
+  const title = prompt(klass + '　' + dateStr + '　' + period + '限　の授業名:');
+  if (!title) return;
+  const card = normalizeCard(await api.addCard(lists[0].id, title));
+  card.klass = klass; card.period = period; card.start = dateStr;
+  await api.updateCard(card.id, { klass: klass, period: period, start: dateStr });
+  STATE.cards.push(card);
+  renderWeek(); render();
+  setStatus('授業カードを作りました');
+}
+
+// カード詳細のクラス／時限の選択肢を作る
+function renderKlassPeriod(card) {
+  const ks = $('#m-klass'), ps = $('#m-period');
+  if (!ks || !ps) return;
+  ks.innerHTML = '<option value="">（なし）</option>';
+  CLASSES.forEach(function (k) {
+    const o = document.createElement('option'); o.value = k; o.textContent = k;
+    if (card.klass === k) o.selected = true;
+    ks.appendChild(o);
+  });
+  ps.innerHTML = '<option value="0">（なし）</option>';
+  PERIODS.forEach(function (p) {
+    const o = document.createElement('option'); o.value = String(p); o.textContent = p + '限';
+    if (Number(card.period) === p) o.selected = true;
+    ps.appendChild(o);
+  });
+}
+
+/* --------------------------- 変更履歴 --------------------------- */
+const HIST_LABEL = { title: 'タイトル', desc: '説明', due: '期限', start: '開始',
+                     done: '完了', archived: 'アーカイブ', klass: 'クラス', period: '時限' };
+
+async function showCardHistory() {
+  const card = currentCard(); if (!card) return;
+  const box = $('#m-history');
+  box.innerHTML = '<div class="set-note">読み込み中...</div>';
+  let rows = [];
+  try { rows = await api.getCardHistory(card.id); } catch (e) {
+    box.innerHTML = '<div class="set-note">履歴を読めませんでした</div>'; return;
+  }
+  box.innerHTML = '';
+  if (!rows.length) { box.appendChild(el('div', 'set-note', 'まだ履歴はありません。')); return; }
+
+  rows.forEach(function (h) {
+    const row = el('div', 'hist-row');
+    const when = String(h.at || '').replace('T', ' ').slice(0, 16);
+    row.appendChild(el('div', 'hist-when', esc(when) + '　' + esc(HIST_LABEL[h.field] || h.field)));
+    row.appendChild(el('div', 'hist-diff',
+      '<span class="hist-before">' + esc(String(h.before).slice(0, 80) || '（空）') + '</span>'
+      + ' → <span class="hist-after">' + esc(String(h.after).slice(0, 80) || '（空）') + '</span>'));
+    const back = el('button', 'ghost-btn small dark', 'この変更を戻す');
+    back.addEventListener('click', async function () {
+      await api.revertHistory(h.id);
+      await reloadCurrentBoardCards();
+      renderModal(); render(); showCardHistory();
+      setStatus('戻しました');
+    });
+    row.appendChild(back);
+    box.appendChild(row);
+  });
+}
+
+/* --------------------------- Gmail 取り込み --------------------------- */
+function fillListSelect(sel, selectedId) {
+  if (!sel) return;
+  sel.innerHTML = '';
+  STATE.boards.filter(function (b) { return !b.archived; }).forEach(function (b) {
+    STATE.lists.filter(function (l) { return l.boardId === b.id && !l.archived; }).forEach(function (l) {
+      const o = document.createElement('option');
+      o.value = l.id; o.textContent = b.title + ' / ' + l.title;
+      if (l.id === selectedId) o.selected = true;
+      sel.appendChild(o);
+    });
+  });
+}
+
+async function refreshGmailStatus() {
+  let s = {};
+  try { s = await api.gmailImportStatus(); } catch (e) { return; }
+  $('#gmailLabel').value = s.label || '';
+  fillListSelect($('#gmailList'), s.listId);
+  $('#gmailStatusText').innerHTML = s.on
+    ? '現在：<b>オン</b>（ラベル「' + esc(s.label) + '」・1時間ごと）' + (s.last ? '　最終取り込み: ' + esc(s.last) : '')
+    : '現在：オフ';
+}
+
+/* --------------------------- AI 週次棚卸し --------------------------- */
+async function refreshAiReviewStatus() {
+  let s = {};
+  try { s = await api.aiReviewStatus(); } catch (e) { return; }
+  fillListSelect($('#aiReviewList'), s.listId);
+  $('#aiReviewStatusText').innerHTML = s.on
+    ? '現在：<b>オン</b>（毎週日曜20時）' + (s.last ? '　最終実行: ' + esc(s.last) : '')
+    : '現在：オフ';
+}
+
+/* --------------------------- 自然文でまとめて操作 --------------------------- */
+let bulkActions = [];
+
+async function planBulk() {
+  const text = $('#bulkText').value.trim();
+  if (!text) return;
+  const box = $('#bulkPlan');
+  box.innerHTML = '<div class="set-note">変更案を作っています...</div>';
+  try { bulkActions = (await api.aiPlanBulk(text)).actions || []; }
+  catch (e) { box.innerHTML = '<div class="set-note">' + esc(e) + '</div>'; return; }
+
+  box.innerHTML = '';
+  if (!bulkActions.length) {
+    box.appendChild(el('div', 'set-note', '該当するカードが見つかりませんでした。'));
+    return;
+  }
+  box.appendChild(el('div', 'set-note',
+    '<b>' + bulkActions.length + '件</b> の変更案です。内容を確かめてから実行してください。'));
+
+  bulkActions.forEach(function (a, i) {
+    const row = el('div', 'bulk-row');
+    const chk = document.createElement('input');
+    chk.type = 'checkbox'; chk.checked = true; chk.dataset.idx = String(i);
+    chk.className = 'bulk-chk';
+    row.appendChild(chk);
+
+    const main = el('div', 'bulk-main');
+    main.appendChild(el('div', 'bulk-title', esc(a.title)));
+    const parts = Object.keys(a.change).map(function (k) {
+      const before = a.before && a.before[k] !== undefined ? String(a.before[k]) : '';
+      return (HIST_LABEL[k] || k) + ': ' + esc(before || '（空）') + ' → <b>' + esc(String(a.change[k])) + '</b>';
+    });
+    main.appendChild(el('div', 'bulk-change', parts.join('　/　')));
+    if (a.reason) main.appendChild(el('div', 'bulk-reason', esc(a.reason)));
+    row.appendChild(main);
+    box.appendChild(row);
+  });
+
+  const run = el('button', 'primary-btn', 'チェックした変更を実行する');
+  run.addEventListener('click', applyBulk);
+  const acts = el('div', 'imp-actions'); acts.appendChild(run);
+  box.appendChild(acts);
+}
+
+async function applyBulk() {
+  const chks = document.querySelectorAll('.bulk-chk');
+  const picked = [];
+  for (let i = 0; i < chks.length; i++) {
+    if (chks[i].checked) picked.push(bulkActions[Number(chks[i].dataset.idx)]);
+  }
+  if (!picked.length) { alert('実行する項目がありません。'); return; }
+  if (!confirm(picked.length + ' 件を変更します。よろしいですか?\n（あとからカードごとに履歴で戻せます）')) return;
+
+  setStatus('実行中...');
+  const n = await api.aiApplyBulk(picked);
+  await reloadCurrentBoardCards();
+  invalidateAllCards();
+  $('#bulkPlan').innerHTML = '<div class="set-note">' + n + ' 件を変更しました。</div>';
+  render();
+  setStatus(n + ' 件を変更しました');
+}
+
+/* --------------------------- 意味で探す --------------------------- */
+async function runSemanticIndex() {
+  const st = $('#semIndexStatus');
+  st.textContent = '索引を作っています...';
+  let guard = 0;
+  try {
+    while (guard++ < 40) {            // 1回25件 × 最大40周＝1000件で打ち切り
+      const r = await api.reindexEmbeddings(25);
+      st.textContent = '残り ' + r.remaining + ' 件...';
+      if (!r.remaining) { st.textContent = '索引は最新です（全 ' + r.total + ' 件）'; return; }
+      if (!r.done) { st.textContent = '一部を処理できませんでした（残り ' + r.remaining + ' 件）'; return; }
+    }
+    st.textContent = '件数が多いため途中で止めました。もう一度押してください。';
+  } catch (e) {
+    st.textContent = 'エラー: ' + e;
+  }
+}
+
+async function runSemanticSearch() {
+  const q = $('#semQuery').value.trim();
+  const box = $('#semResult');
+  if (!q) return;
+  box.innerHTML = '<div class="set-note">探しています...</div>';
+  let hits = [];
+  try { hits = await api.semanticSearch(q, 20); }
+  catch (e) { box.innerHTML = '<div class="set-note">' + esc(e) + '</div>'; return; }
+
+  box.innerHTML = '';
+  if (!hits.length) {
+    box.appendChild(el('div', 'set-note', '見つかりませんでした。索引がまだなら「索引を作る」を押してください。'));
+    return;
+  }
+  hits.forEach(function (h) {
+    const row = el('div', 'sem-row');
+    row.appendChild(el('div', 'sem-score', Math.round(h.score * 100) + '%'));
+    const main = el('div', 'sem-main');
+    main.appendChild(el('div', 'sem-title', esc(h.title)));
+    main.appendChild(el('div', 'sem-meta', esc(h.boardTitle) + ' / ' + esc(h.listTitle)
+      + (h.desc ? '　' + esc(h.desc) : '')));
+    row.appendChild(main);
+    row.addEventListener('click', async function () {
+      if (h.boardId && h.boardId !== currentBoardId) {
+        currentBoardId = h.boardId; saveCurrentBoard(h.boardId);
+        await reloadCurrentBoardCards(); render();
+      }
+      hideAI();
+      openModal(h.id);
+    });
+    box.appendChild(row);
+  });
+}
+
 function bindUI() {
   applyTheme(loadTheme());   // 画面がちらつかないよう、他の配線より先に
 
@@ -3090,6 +3462,76 @@ function bindUI() {
     renderTrash();
     setStatus((n || 0) + ' 件を完全に削除しました');
   });
+
+  /* ---- 第2弾の配線 ---- */
+  $('#weekBtn').addEventListener('click', showWeek);
+  $('#weekClose').addEventListener('click', hideWeek);
+  $('#weekPrev').addEventListener('click', function () { weekRef.setDate(weekRef.getDate() - 7); renderWeek(); });
+  $('#weekNext').addEventListener('click', function () { weekRef.setDate(weekRef.getDate() + 7); renderWeek(); });
+  $('#weekToday').addEventListener('click', function () { weekRef = new Date(); renderWeek(); });
+
+  $('#m-klass').addEventListener('change', function () {
+    const card = currentCard(); if (!card) return;
+    card.klass = this.value;
+    api.updateCard(card.id, { klass: card.klass });
+    setStatus('クラスを設定しました');
+  });
+  $('#m-period').addEventListener('change', function () {
+    const card = currentCard(); if (!card) return;
+    card.period = Number(this.value) || 0;
+    api.updateCard(card.id, { period: card.period });
+    setStatus('時限を設定しました');
+  });
+  $('#m-history-btn').addEventListener('click', showCardHistory);
+
+  $('#classSaveBtn').addEventListener('click', async function () {
+    const raw = $('#classList').value;
+    const arr = raw.split(/[,、\n]/).map(function (s) { return s.trim(); }).filter(Boolean);
+    CLASSES = await api.setClasses(arr);
+    setStatus('クラスを保存しました（' + CLASSES.length + '件）');
+  });
+
+  $('#gmailOnBtn').addEventListener('click', async function () {
+    try {
+      await api.enableGmailImport($('#gmailLabel').value, $('#gmailList').value);
+      await refreshGmailStatus();
+      setStatus('Gmail取り込みをオンにしました');
+    } catch (e) { alert(e); }
+  });
+  $('#gmailOffBtn').addEventListener('click', async function () {
+    await api.disableGmailImport(); await refreshGmailStatus(); setStatus('オフにしました');
+  });
+  $('#gmailNowBtn').addEventListener('click', async function () {
+    setStatus('取り込み中...');
+    try {
+      const r = await api.importGmailNow();
+      await reloadCurrentBoardCards(); invalidateAllCards(); render();
+      await refreshGmailStatus();
+      setStatus((r.added || 0) + ' 件取り込みました' + (r.reason ? '（' + r.reason + '）' : ''));
+    } catch (e) { alert(e); setStatus(''); }
+  });
+
+  $('#aiReviewOnBtn').addEventListener('click', async function () {
+    try { await api.enableAiReview($('#aiReviewList').value); await refreshAiReviewStatus(); setStatus('オンにしました'); }
+    catch (e) { alert(e); }
+  });
+  $('#aiReviewOffBtn').addEventListener('click', async function () {
+    await api.disableAiReview(); await refreshAiReviewStatus(); setStatus('オフにしました');
+  });
+  $('#aiReviewNowBtn').addEventListener('click', async function () {
+    setStatus('AIが確認しています...');
+    try {
+      const r = await api.aiWeeklyReview();
+      await reloadCurrentBoardCards(); invalidateAllCards(); render();
+      await refreshAiReviewStatus();
+      setStatus((r.added || 0) + ' 件の提案を置きました' + (r.reason ? '（' + r.reason + '）' : ''));
+    } catch (e) { alert(e); setStatus(''); }
+  });
+
+  $('#bulkPlanBtn').addEventListener('click', planBulk);
+  $('#semBtn').addEventListener('click', runSemanticSearch);
+  $('#semQuery').addEventListener('keydown', function (e) { if (e.key === 'Enter') runSemanticSearch(); });
+  $('#semIndexBtn').addEventListener('click', runSemanticIndex);
 
   $('#exportJsonBtn').addEventListener('click', exportJson);
   $('#exportCsvBtn').addEventListener('click', exportCsv);
