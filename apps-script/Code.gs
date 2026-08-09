@@ -67,7 +67,7 @@ const API_ALLOWED = {
   getTrash: 1, restoreCard: 1, purgeCard: 1, emptyTrash: 1,
   exportAll: 1, healthCheck: 1, copyBoard: 1,
   getCardHistory: 1, revertHistory: 1,
-  getClasses: 1, setClasses: 1,
+  getClasses: 1, setClasses: 1, distributeLesson: 1,
   gmailImportStatus: 1, enableGmailImport: 1, disableGmailImport: 1, importGmailNow: 1,
   aiReviewStatus: 1, enableAiReview: 1, disableAiReview: 1, aiWeeklyReview: 1,
   aiPlanBulk: 1, aiApplyBulk: 1,
@@ -737,6 +737,46 @@ function copyBoard(boardId, newTitle) {
     if (newCards.length) appendRows_(csh, 'Cards', newCards);
 
     return board;
+  });
+}
+
+// 1枚の授業カードを、複数のクラスへ日付・時限を指定してまとめて配る（週案の一括展開）。
+// targets = [{klass:'1年2組', date:'2026-09-08', period:3}, ...]
+// 本文・チェックリスト・ラベル・カスタムフィールドは引き継ぎ、
+// コメント・添付・完了状態・Google連携は引き継がない（copyCard と同じ方針）。
+function distributeLesson(cardId, targets) {
+  return withLock_(function () {
+    const sh = getSS_().getSheetByName('Cards');
+    const row = findRow_(sh, cardId);
+    if (row < 0) return [];
+    const vals = sh.getRange(row, 1, 1, SCHEMA.Cards.length).getValues()[0];
+    const base = {};
+    SCHEMA.Cards.forEach(function (k, i) { base[k] = vals[i]; });
+
+    const now = new Date().toISOString();
+    let maxPos = sheetObjects_(sh)
+      .filter(function (c) { return c.listId === base.listId; })
+      .reduce(function (m, p) { return Math.max(m, Number(p.position) || 0); }, -1);
+
+    const made = [];
+    (targets || []).forEach(function (t) {
+      if (!t || !t.klass) return;
+      const o = {};
+      SCHEMA.Cards.forEach(function (k) { o[k] = base[k]; });
+      o.id = Utilities.getUuid();
+      o.position = ++maxPos;
+      o.klass = String(t.klass);
+      o.period = Number(t.period) || 0;
+      o.start = t.date || base.start;
+      o.due = '';                      // 授業カードに期限は持たせない
+      o.comments = '[]'; o.attachments = '[]'; o.sync = '{}';
+      o.done = false; o.archived = false; o.template = false; o.deleted = false;
+      o.embedding = ''; o.embHash = '';
+      o.createdAt = now; o.updatedAt = now;
+      made.push(o);
+    });
+    if (made.length) appendRows_(sh, 'Cards', made);
+    return made.map(function (o) { return parseCard_(o); });
   });
 }
 

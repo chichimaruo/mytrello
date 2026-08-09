@@ -3,7 +3,7 @@
    起動を速く・再読み込みされても一瞬で表示・電波が弱くても画面だけは開けるようにする。
    ※ データ通信（Apps Scriptへのfetch=別オリジンのPOST）はキャッシュせず常に最新を取りに行く。
    下の CACHE の値は _build_pwa.py が中身のハッシュで自動更新する（手で変える必要はない）。 */
-const CACHE = 'mt-f1c5a8009b';
+const CACHE = 'mt-fe551800d9';
 const ASSETS = [
   './',
   './index.html',

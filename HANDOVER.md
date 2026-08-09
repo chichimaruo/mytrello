@@ -370,6 +370,8 @@ UIは画面下部の各 `#overlay`（boardHome, calendar, table, dashboard, time
 | 機能 | 触る場所 | 注意 |
 |---|---|---|
 | 週案ビュー | `showWeek/renderWeek` ／ `Cards.klass`・`period` | 位置は **クラス × 時限 × 日付(start)** で決まる。クラス一覧は Script Property `CLASSES`（`getClasses/setClasses`）。空だと何も出ないので設定画面へ誘導している |
+| 週案のドラッグ移動 | `enableWeekDrag` | 各マスを Sortable にし、`onAdd` で**落とした先のマスの data属性**（klass/date/period）を読んでカードを書き換える。マスの `data-*` を消すと移動先が特定できなくなる。`draggable:'.week-chip'` で「＋」を掴めないようにしている。**再描画のたびに destroy**（週案を閉じたときも） |
+| 一括展開 | `distributeLesson` ／ `showDistPanel` | 元カードの全列をコピーし、クラス・日付・時限だけ差し替える。コメント/添付/完了/連携/埋め込みは引き継がない。`due` は空にする（授業カードに期限は持たせない方針） |
 | 変更履歴 | `History` シート ／ `recordHistory_` | `updateCard` の中で**変更前を先に読んでから**書き込む。順序を逆にすると差分が取れない。`HISTORY_FIELDS` の項目だけ記録し、上限2000行で古い方から剪定。**履歴の失敗が本体の保存を壊さないよう try で包んである** |
 | Gmail取り込み | `importGmailNow` ／ トリガー1時間ごと | 二重取り込み防止は**ラベルの付け替え**（元ラベルを外し `MyTrello済み` を付ける）で実現。実行時間の上限があるので**1回20件で打ち切り**、残りは次回 |
 | AI週次棚卸し | `aiWeeklyReview` ／ 日曜20時 | **既存カードは絶対に書き換えない**（提案カードを置くだけ）。置き場所は `AIREVIEW_LIST`。`boardDigest_()` が盤面を要点だけのテキストに圧縮（最大400枚） |

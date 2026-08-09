@@ -537,6 +537,18 @@
             <div class="set-row">
               <label>クラス：<select id="m-klass"></select></label>
               <label>時限：<select id="m-period"></select></label>
+              <button id="m-dist-btn" class="ghost-btn small dark">他のクラスへ展開</button>
+            </div>
+            <div id="m-dist-panel" class="dist-panel hidden">
+              <p class="set-note">
+                この授業を、選んだクラスにも作ります。日付と時限はクラスごとに変えられます。
+                説明・チェックリスト・ラベルは引き継ぎ、コメント・添付・完了状態は引き継ぎません。
+              </p>
+              <div id="m-dist-rows"></div>
+              <div class="imp-actions">
+                <button id="m-dist-run" class="primary-btn">展開する</button>
+                <button id="m-dist-cancel" class="ghost-btn small dark">やめる</button>
+              </div>
             </div>
           </div>
 

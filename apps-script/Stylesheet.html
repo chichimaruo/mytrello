@@ -492,6 +492,15 @@
   .week-add { width: 100%; border: 0; background: transparent; color: #b3bac5; cursor: pointer; font-size: 13px; }
   .week-cell:hover .week-add { color: #0079bf; }
 
+  .week-chip { user-select: none; }
+  .week-cell.sortable-ghost, .week-chip.sortable-ghost { opacity: .4; }
+
+  /* 一括展開パネル */
+  .dist-panel { border: 1px solid #dfe1e6; border-radius: 8px; padding: 10px 12px; margin-top: 8px; background: #fbfcfd; }
+  .dist-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+  .dist-name { flex: 0 0 110px; font-size: 13px; }
+  .dist-date, .dist-period { font-size: 13px; padding: 3px 6px; }
+
   /* 進度 */
   .prog-row { display: flex; align-items: center; gap: 10px; padding: 5px 0; font-size: 13px; }
   .prog-name { flex: 0 0 110px; }
@@ -571,6 +580,7 @@
   :root.theme-dark .hist-before { color: #f28b82; }
   :root.theme-dark .hist-after { color: #81c995; }
   :root.theme-dark .sem-score { color: #8ab4f8; }
+  :root.theme-dark .dist-panel { background: #232428; border-color: rgba(255,255,255,.15); }
 
   /* Mobile */
   @media (max-width: 700px) {

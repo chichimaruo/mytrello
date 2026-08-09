@@ -1253,6 +1253,7 @@ function openModal(cardId) {
   hideFieldForm();
   $('#m-move-panel').classList.add('hidden');
   resetDescPreview();      // 前のカードのプレビュー表示を持ち越さない
+  hideDistPanel();         // 展開パネルも畳んでおく
   renderModal();
   $('#modal').classList.remove('hidden');
   autoGrow($('#m-desc')); // 表示後に高さを中身へ合わせる
@@ -3053,7 +3054,11 @@ function mondayOf(d) {
 }
 
 /* --------------------------- 週案ビュー --------------------------- */
-function hideWeek() { $('#week').classList.add('hidden'); }
+function hideWeek() {
+  $('#week').classList.add('hidden');
+  weekSortables.forEach(function (s) { try { s.destroy(); } catch (e) {} });
+  weekSortables = [];
+}
 
 async function showWeek() {
   $('#week').classList.remove('hidden');
@@ -3116,10 +3121,13 @@ function renderWeek() {
       const ds = ymd(d);
       PERIODS.forEach(function (p) {
         const td = el('td', 'week-cell' + (ds === ymd(new Date()) ? ' today' : ''));
+        // ドロップ先を特定するための情報（onAdd で読む）
+        td.dataset.date = ds; td.dataset.period = String(p); td.dataset.klass = k;
         const here = slot[ds + '|' + p + '|' + k] || [];
         here.forEach(function (c) {
           const chip = el('div', 'week-chip' + (c.done ? ' done' : ''), esc(c.title));
-          chip.title = c.title;
+          chip.title = c.title + '（ドラッグで移動できます）';
+          chip.dataset.cardId = c.id;
           chip.addEventListener('click', function () { hideWeek(); openModal(c.id); });
           td.appendChild(chip);
         });
@@ -3137,7 +3145,46 @@ function renderWeek() {
   table.appendChild(tbody);
   body.appendChild(table);
 
+  enableWeekDrag();
   renderWeekProgress();
+}
+
+// グリッドのマス目どうしでカードをドラッグ移動できるようにする。
+// 落とした先のマスから クラス・日付・時限 を読み取ってカードを書き換える。
+let weekSortables = [];
+function enableWeekDrag() {
+  weekSortables.forEach(function (s) { try { s.destroy(); } catch (e) {} });
+  weekSortables = [];
+  if (typeof Sortable === 'undefined') return;
+
+  const cells = document.querySelectorAll('#weekBody .week-cell');
+  for (let i = 0; i < cells.length; i++) {
+    weekSortables.push(new Sortable(cells[i], {
+      group: 'weekgrid',
+      draggable: '.week-chip',      // 「＋」ボタンは掴めないようにする
+      animation: 120,
+      delay: 200,                   // スマホの長押しドラッグ（既存のボードと同じ操作感）
+      delayOnTouchOnly: true,
+      onAdd: async function (evt) {
+        const td = evt.to;
+        const id = evt.item.dataset.cardId;
+        const card = STATE.cards.find(function (c) { return c.id === id; });
+        if (!card) { renderWeek(); return; }
+
+        card.klass = td.dataset.klass;
+        card.period = Number(td.dataset.period) || 0;
+        card.start = td.dataset.date;
+        try {
+          await api.updateCard(card.id, { klass: card.klass, period: card.period, start: card.start });
+          setStatus(card.klass + ' ' + card.start + ' ' + card.period + '限 に移動しました');
+        } catch (e) {
+          setStatus('移動を保存できませんでした');
+        }
+        renderWeek();               // 「＋」の出し分けを作り直すため丸ごと描き直す
+        refreshCardNode(card);
+      }
+    }));
+  }
 }
 
 // クラスごとの進度差（同じタイトルの授業が、どのクラスで何回済んでいるか）
@@ -3211,6 +3258,69 @@ function renderKlassPeriod(card) {
     if (Number(card.period) === p) o.selected = true;
     ps.appendChild(o);
   });
+}
+
+/* --------------------------- 一括展開（他のクラスへ配る） --------------------------- */
+function hideDistPanel() { $('#m-dist-panel').classList.add('hidden'); }
+
+function showDistPanel() {
+  const card = currentCard(); if (!card) return;
+  if (!CLASSES.length) { alert('先に ⚙設定 →「🗓 週案のクラス」でクラスを登録してください。'); return; }
+  if (!card.klass) { alert('先にこのカードのクラスを設定してください。'); return; }
+
+  const base = card.start || card.due || ymd(new Date());
+  const rows = $('#m-dist-rows'); rows.innerHTML = '';
+
+  CLASSES.filter(function (k) { return k !== card.klass; }).forEach(function (k, i) {
+    const row = el('div', 'dist-row');
+
+    const chk = document.createElement('input');
+    chk.type = 'checkbox'; chk.className = 'dist-chk'; chk.checked = true; chk.dataset.klass = k;
+    row.appendChild(chk);
+    row.appendChild(el('span', 'dist-name', esc(k)));
+
+    // 既定は元カードと同じ日。1クラスずつ翌日にずらすのではなく、同日同時限をまず出して手で直す方が実態に合う
+    const d = document.createElement('input');
+    d.type = 'date'; d.className = 'dist-date'; d.value = base; d.dataset.klass = k;
+    row.appendChild(d);
+
+    const p = document.createElement('select');
+    p.className = 'dist-period'; p.dataset.klass = k;
+    PERIODS.forEach(function (n) {
+      const o = document.createElement('option');
+      o.value = String(n); o.textContent = n + '限';
+      if (Number(card.period) === n) o.selected = true;
+      p.appendChild(o);
+    });
+    row.appendChild(p);
+
+    rows.appendChild(row);
+  });
+
+  $('#m-dist-panel').classList.remove('hidden');
+}
+
+async function runDistribute() {
+  const card = currentCard(); if (!card) return;
+  const chks = document.querySelectorAll('.dist-chk');
+  const targets = [];
+  for (let i = 0; i < chks.length; i++) {
+    if (!chks[i].checked) continue;
+    const k = chks[i].dataset.klass;
+    const d = document.querySelector('.dist-date[data-klass="' + k + '"]');
+    const p = document.querySelector('.dist-period[data-klass="' + k + '"]');
+    targets.push({ klass: k, date: d ? d.value : '', period: Number(p ? p.value : 0) || 0 });
+  }
+  if (!targets.length) { alert('展開するクラスを選んでください。'); return; }
+
+  setStatus('展開中...');
+  const made = await api.distributeLesson(card.id, targets);
+  (made || []).forEach(function (c) { STATE.cards.push(normalizeCard(c)); });
+  invalidateAllCards();
+  hideDistPanel();
+  render();
+  if (!$('#week').classList.contains('hidden')) renderWeek();
+  setStatus((made || []).length + ' クラスへ展開しました');
 }
 
 /* --------------------------- 変更履歴 --------------------------- */
@@ -3483,6 +3593,9 @@ function bindUI() {
     setStatus('時限を設定しました');
   });
   $('#m-history-btn').addEventListener('click', showCardHistory);
+  $('#m-dist-btn').addEventListener('click', showDistPanel);
+  $('#m-dist-cancel').addEventListener('click', hideDistPanel);
+  $('#m-dist-run').addEventListener('click', runDistribute);
 
   $('#classSaveBtn').addEventListener('click', async function () {
     const raw = $('#classList').value;
