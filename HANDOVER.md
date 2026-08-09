@@ -1,6 +1,6 @@
 # My Trello — 開発引き継ぎドキュメント
 
-最終更新: 2026-08-08 / 現在のスキーマ版数: **SCHEMA_VERSION = '17'**
+最終更新: 2026-08-09 / 現在のスキーマ版数: **SCHEMA_VERSION = '18'**
 
 このファイルは「後日また開発を再開するとき」に経緯・構造・注意点を一気に思い出すための引き継ぎ資料です。
 **まずこのファイルと `MEMORY`（後述）を読めば、ほぼ全体像がつかめます。**
@@ -42,8 +42,10 @@ My Trello Project/            ← 正本（Googleドライブ）
 │  ├─ JavaScript.html ← 画面の動作（クライアントJS）。<script>で始まる
 │  └─ appsscript.json ← マニフェスト（タイムゾーン・Tasks高度サービス等）
 ├─ webapp/            ← ☆自動生成（手で編集しない）。GitHub Pagesで配信される中身
-│  ├─ index.html / style.css / app.js  ← 上の3ファイルから変換したもの
-│  ├─ manifest.json / service-worker.js / アイコン3種
+│  ├─ index.html / style.css / app.js  ← 上の3ファイルから変換したもの（手で編集しない）
+│  ├─ manifest.json    ← ★これは自動生成ではない。手で編集する（共有ターゲット等）
+│  ├─ service-worker.js ← 手で編集するが、CACHE の行だけビルドが書き換える
+│  └─ アイコン3種       ← myboard-icon.png から生成
 └─ .github/workflows/deploy.yml ← push で自動ビルド＆公開
 ```
 > Apps Script上のファイル名は **Code.gs / Index / Stylesheet / JavaScript**（HTMLは拡張子なしで作成）。大文字小文字も厳密に一致させること。
@@ -148,7 +150,7 @@ DBは「My Trello DB」というスプレッドシート（初回アクセス時
 |---|---|
 | **Boards** | id, title, position, archived, createdAt, background, shareToken |
 | **Lists** | id, title, position, archived, boardId, wip, collapsed |
-| **Cards** | id, listId, title, desc, position, labels, due, checklist, comments, createdAt, updatedAt, archived, attachments, start, allDay, done, ratings, fields, cover, template, links, sync, places |
+| **Cards** | id, listId, title, desc, position, labels, due, checklist, comments, createdAt, updatedAt, archived, attachments, start, allDay, done, ratings, fields, cover, template, links, sync, places, deleted |
 | **Labels** | id, name, color, boardId |
 | **Fields** | id, boardId, name, type, config, position, showFront |
 | **Views** | id, name, config, position |
@@ -156,7 +158,13 @@ DBは「My Trello DB」というスプレッドシート（初回アクセス時
 | **Recurring** | id, boardId, listId, title, freq, lastRun, position |
 
 JSON文字列で保存する列：Cards.labels(配列), checklist(配列), comments(配列), attachments(配列), ratings(旧・未使用), fields({fieldId:値}), cover({type,value/fileId}|null), links(URL配列), sync({gcal,gtask}), places(地名の文字列配列) / Fields.config / Views.config / Automations.actions。
-boolean列：archived, allDay, done, template, showFront, collapsed。
+boolean列：archived, allDay, done, template, showFront, collapsed, deleted。
+
+> **`archived` と `deleted` は別物**。`archived`＝ユーザーが片付けたカード（アーカイブ画面から戻せる）。
+> `deleted`＝**ゴミ箱**（削除を取り消せるようにするための論理削除／v18で追加）。
+> **カードを読む経路すべてで `deleted` を除外すること**（`getInitial` / `getCards` / `getAllCards` /
+> `copyList` / `copyBoard` / 共有ビュー / AI要約 / `sendDueReminders`）。判定は `isTrashed_()` を使う。
+> 行を本当に消すのは `purgeCard` / `emptyTrash` だけで、添付をDriveのゴミ箱へ送るのもそこだけ。
 
 > **ratings列は旧「評価軸」の名残で現在未使用**（fieldsに統合済み）。Ratingsシートも旧版の名残で残ることがあるが未使用。
 
@@ -189,6 +197,14 @@ boolean列：archived, allDay, done, template, showFront, collapsed。
 - **WIPリミット**（リストの上限・超過で赤）
 - **Trelloインポート**（JSON）, **自動バックアップ**, **更新ボタン＋エラー表示**
 - **地図・場所**（`Cards.places`）: カードに地名を登録 → クリックで地図を読み込み／Google Mapsで開く
+- **今日やること**（上部バー「☀ 今日」）: 全ボード横断で「期限切れ」「今日まで」を一覧。その場で完了にでき、クリックでそのボードへ飛ぶ
+- **ゴミ箱**（アーカイブ画面の下）: 削除したカードを復元できる。完全削除は別操作
+- **ボード複製**（ボード一覧の 📄）: リスト/カード/ラベル/カスタムフィールドごと複製。年度やクラスの使い回し用
+- **エクスポート**（⚙設定）: 全データJSON ／ カード一覧CSV。バックアップとは別に、アプリ外へ持ち出せる形
+- **健康診断**（⚙設定）: バックアップ鮮度・登録トリガー・件数・構成を表示。「静かに止まる」問題に自分で気づくため
+- **Markdownプレビュー**（カードの説明欄 👁）: 見出し/太字/箇条書き/リンクなど。外部ライブラリ不使用
+- **表示テーマ**（⚙設定）: ライト／ダーク／自動。**パソコンでもダークにできる**（スマホの細い画面は従来どおり常にダーク）
+- **共有ターゲット**（アプリ版のみ）: スマホの「共有」メニューから My Trello を選ぶとカードになる
 - **リストの折りたたみ**（`Lists.collapsed`）: 個別／一括。畳んだリストは件数だけ縦表示
 - **復帰のしやすさ**: 再読み込みしてもスクロール位置と開いていたカードを復元（スマホでSafariに落とされても続きから）
 
@@ -198,7 +214,10 @@ UIは画面下部の各 `#overlay`（boardHome, calendar, table, dashboard, time
 
 ## 6. サーバーAPI（Code.gs 主な関数）
 - **基盤**: `doGet(e)`, `doPost(e)`, `handleApi_/apiJson_/apiPing/setupApiToken`, `getSS_/ensureSchema_/createDB_/ensureColumn_/sheetObjects_/findRow_/rowFromObject_/withLock_/parseJson_/parseCard_/toYmd_`
-- **データ取得（遅延ロード）**: `getInitial(boardId)`(メタ＋その板のカードを1往復), `getMeta()`(カード以外), `getCards(boardId)`, `getAllCards()`, `getState()`(全部＝旧互換)
+- **データ取得（遅延ロード）**: `getInitial(boardId)`(メタ＋その板のカードを1往復), `getMeta()`(カード以外), `getCards(boardId)`, `getAllCards()`, `getState()`(全部＝旧互換)。判定ヘルパー `isTrashed_()`
+- **ゴミ箱**: `getTrash()`, `restoreCard(id)`, `purgeCard(id)`, `emptyTrash()`
+- **持ち出し/点検**: `exportAll()`, `healthCheck()`
+- **ボード複製**: `copyBoard(boardId, newTitle)`
 - **Board**: addBoard, renameBoard, archiveBoard, deleteBoard, saveBoardOrder, setBoardBackground, setBoardShare
 - **List**: addList, renameList, deleteList, saveListOrder, archiveList, setListWip, setListCollapsed, setAllListsCollapsed, copyList, archiveAllCards
 - **Card**: addCard, updateCard, deleteCard, saveCardOrder, moveCard, moveCardToList, copyCard
@@ -337,6 +356,23 @@ UIは画面下部の各 `#overlay`（boardHome, calendar, table, dashboard, time
 - **v3.11（2026-08-08）**：clasp 導入で Apps Script 側もコマンド反映に（`_push_gas.ps1`）。
   その初回突き合わせで**ドライブ側の `appsscript.json` が PWA化以前の `MYSELF` のまま取り残されていた事故要因を発見・修正**（§11-12）。
   併せてサーバー側に未反映だった iPhone セーフエリア対応CSS・折りたたみ件数のフィルター対応を反映し、全ファイル一致にした
+- **v3.11（2026-08-09）**：`.ps1` が起動しない問題（Googleドライブの Zone.Identifier ＋ RemoteSigned）を `.cmd` ランチャーで解決（§11-13）
+- **v3.12（2026-08-09）SCHEMA 18**：共有ターゲット / 今日ビュー / ボード複製 / ゴミ箱（削除の取り消し） /
+  エクスポート(JSON・CSV) / 健康診断 / Markdownプレビュー / PCダークモード の8機能を追加（詳細は §12.5）
+
+---
+
+## 12.5 v3.12（2026-08-09）で足した8機能の勘所
+| 機能 | 触る場所 | 注意 |
+|---|---|---|
+| 共有ターゲット | `webapp/manifest.json` の `share_target` ＋ `handleShareTarget()` | **manifest.json はビルド生成物ではない**（手で編集する数少ない webapp 内ファイル）。Apps Script版では該当パラメータが来ないので何も起きない |
+| 今日ビュー | `showToday/renderToday` | 横断ビューなので冒頭で `await ensureAllCards()` |
+| ボード複製 | `copyBoard` | ラベルIDとカスタムフィールドIDを**新しいIDへ張り替える**のが肝。忘れると色やフィールド値が壊れる。複製後は `invalidateAllCards()` |
+| ゴミ箱 | `deleted` 列 / `isTrashed_` | §3の注記参照。**読み取り経路すべてで除外**すること |
+| エクスポート | `exportAll` ＋ クライアントの `exportCsv` | CSVは先頭にBOMを付けてExcelの文字化けを回避 |
+| 健康診断 | `healthCheck` | `ScriptApp.getProjectTriggers()` を使うのでトリガー権限が要る |
+| Markdown | `renderMarkdown` | **必ず `esc()` を通してから記号を変換**している。順序を逆にするとHTML混入になる |
+| テーマ | `:root.theme-dark` ＋ `applyTheme` | スマホ用ダークは `@media (max-width:700px)` の中にあり**別物**。触るときは両方確認 |
 
 ---
 
