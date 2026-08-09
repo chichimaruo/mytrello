@@ -113,6 +113,11 @@ Gitはドライブ同期と相性が悪いので**ドライブの外**に置く�
 `deployments` → `list-deployments`、`status` → `show-file-status`）。旧v2向けの記事をそのまま真似すると動かない。
 上記コマンド名・オプションは clasp 3.3.0 の `--help` で実在を確認済み。
 
+> **2026-08-09、通しで実行して動作確認済み。** `@40` を指定して `Redeployed ... @41` を確認
+> （デプロイIDは同じ＝**URLは変わらない**。新バージョン41が作られて差し替わる）。
+> 差し替え先は `@HEAD` ではなく**アプリが実際に使っている方**を選ぶこと。
+> どのIDを使っているかはアプリの ⚙設定 →「🔌接続設定」のURL（`/s/` と `/exec` の間）で分かる。
+
 ### 2-C. アプリ版（PWA）の反映 ＝ `_publish.cmd` をダブルクリックするだけ
 `My Trello Project\_publish.cmd` をダブルクリック。中でやっていること：
 1. `python _build_pwa.py` … `apps-script/` から `webapp/` を作り直す（Pillowが必要: `pip install Pillow`）
@@ -336,6 +341,12 @@ UIは画面下部の各 `#overlay`（boardHome, calendar, table, dashboard, time
 ---
 
 ## 13. 未実装 / TODO（次にやるなら）
+- **小さいが既知の不具合（優先度低）**：ログインしていない人がデプロイURLを素で開くと、意図した案内文ではなく
+  **Apps Script の例外画面**（`Session.getEffectiveUser を呼び出す権限がありません` / Code 44行目）が出る。
+  `doGet` は案内文を返す設計だが、その手前の `Session.getEffectiveUser()` が匿名アクセスでは権限エラーになり、
+  そこまで到達しない。**アプリ版(PWA)は POST で `handleApi_` に直行するので影響なし**。
+  実害は内部のファイル名と行番号が見える程度。直すなら `Session` の2行を try/catch で囲み、
+  失敗したら案内文を返すようにする。次にコードを触るついででよい。
 - ~~遅延ロード~~ → **v3.8 で実装済み**（§7参照）
 - 候補：説明のMarkdownプレビュー / PCのダークモード切替 / バーンダウン等の推移グラフ / カードの関連付け・依存 / 時間トラッキング・ポモドーロ / 音声でカード追加。
 - 保守面の候補：Apps Script 側も `clasp` でコマンドから配信できるようにする（今はコピペ）。

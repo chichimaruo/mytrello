@@ -100,5 +100,5 @@ try {
 } finally { Pop-Location }
 
 Write-Host "`n完了。ブラウザで Ctrl+Shift+R して確認してください。" -ForegroundColor Green
-Write-Host '※ アプリ版(PWA)側の反映が必要なら _publish.ps1 も実行してください。'
+Write-Host '※ アプリ版(PWA)側の反映が必要なら _publish.cmd も実行してください。'
 Read-Host "`nEnter で閉じます"
