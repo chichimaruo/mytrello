@@ -1,6 +1,6 @@
 # My Trello — 開発引き継ぎドキュメント
 
-最終更新: 2026-08-09 / 現在のスキーマ版数: **SCHEMA_VERSION = '18'**
+最終更新: 2026-08-09 / 現在のスキーマ版数: **SCHEMA_VERSION = '19'**
 
 このファイルは「後日また開発を再開するとき」に経緯・構造・注意点を一気に思い出すための引き継ぎ資料です。
 **まずこのファイルと `MEMORY`（後述）を読めば、ほぼ全体像がつかめます。**
@@ -150,12 +150,13 @@ DBは「My Trello DB」というスプレッドシート（初回アクセス時
 |---|---|
 | **Boards** | id, title, position, archived, createdAt, background, shareToken |
 | **Lists** | id, title, position, archived, boardId, wip, collapsed |
-| **Cards** | id, listId, title, desc, position, labels, due, checklist, comments, createdAt, updatedAt, archived, attachments, start, allDay, done, ratings, fields, cover, template, links, sync, places, deleted |
+| **Cards** | id, listId, title, desc, position, labels, due, checklist, comments, createdAt, updatedAt, archived, attachments, start, allDay, done, ratings, fields, cover, template, links, sync, places, deleted, klass, period, embedding, embHash |
 | **Labels** | id, name, color, boardId |
 | **Fields** | id, boardId, name, type, config, position, showFront |
 | **Views** | id, name, config, position |
 | **Automations** | id, boardId, triggerList, actions, position |
 | **Recurring** | id, boardId, listId, title, freq, lastRun, position |
+| **History** | id, cardId, at, field, before, after |
 
 JSON文字列で保存する列：Cards.labels(配列), checklist(配列), comments(配列), attachments(配列), ratings(旧・未使用), fields({fieldId:値}), cover({type,value/fileId}|null), links(URL配列), sync({gcal,gtask}), places(地名の文字列配列) / Fields.config / Views.config / Automations.actions。
 boolean列：archived, allDay, done, template, showFront, collapsed, deleted。
@@ -245,9 +246,10 @@ UIは画面下部の各 `#overlay`（boardHome, calendar, table, dashboard, time
 ---
 
 ## 8. 権限スコープ / トリガー / 外部連携
-- **スコープ**: spreadsheets, drive, script.external_request（UrlFetch=Gemini/Wikimedia/Drive REST), script.send_mail（MailApp=リマインダー）, script.scriptapp（トリガー）, calendar（CalendarApp）, tasks（Tasks高度サービス）。
+- **スコープ**: spreadsheets, drive, gmail（GmailApp=取り込み・v3.13で追加）, script.external_request（UrlFetch=Gemini/Wikimedia/Drive REST), script.send_mail（MailApp=リマインダー）, script.scriptapp（トリガー）, calendar（CalendarApp）, tasks（Tasks高度サービス）。
 - **appsscript.json**: `enabledAdvancedServices`に **Tasks v1** を宣言（Googleタスク連携に必須）。
-- **時刻トリガー（3種）**: `sendDueReminders`（毎朝・任意時刻）, `runRecurring`（毎日1時）, `backupNow`（毎日/毎週2時）。いずれもUIのオン/オフで作成・削除。
+- **時刻トリガー（5種）**: `sendDueReminders`（毎朝・任意時刻）, `runRecurring`（毎日1時）, `backupNow`（毎日/毎週2時）,
+  `importGmailNow`（1時間ごと・v3.13）, `aiWeeklyReview`（日曜20時・v3.13）。いずれもUIのオン/オフで作成・削除。
 
 > **★トリガーは「作ったつもり」で存在しないことがある。定期的に実物を見ること。**
 > 一覧はここ → script.google.com で My Trello を開く → 左サイドバーの **⏰ マイトリガー**
@@ -357,8 +359,22 @@ UIは画面下部の各 `#overlay`（boardHome, calendar, table, dashboard, time
   その初回突き合わせで**ドライブ側の `appsscript.json` が PWA化以前の `MYSELF` のまま取り残されていた事故要因を発見・修正**（§11-12）。
   併せてサーバー側に未反映だった iPhone セーフエリア対応CSS・折りたたみ件数のフィルター対応を反映し、全ファイル一致にした
 - **v3.11（2026-08-09）**：`.ps1` が起動しない問題（Googleドライブの Zone.Identifier ＋ RemoteSigned）を `.cmd` ランチャーで解決（§11-13）
+- **v3.13（2026-08-09・第2弾）SCHEMA 19**：週案ビュー / 変更履歴と巻き戻し / Gmail取り込み /
+  AI週次棚卸し / 自然文一括操作 / 意味検索 の6機能（詳細は §12.6）。**Gmail・トリガー系のスコープが増えたので再承認が要る**
 - **v3.12（2026-08-09）SCHEMA 18**：共有ターゲット / 今日ビュー / ボード複製 / ゴミ箱（削除の取り消し） /
   エクスポート(JSON・CSV) / 健康診断 / Markdownプレビュー / PCダークモード の8機能を追加（詳細は §12.5）
+
+---
+
+## 12.6 v3.13（2026-08-09・第2弾）で足した6機能の勘所
+| 機能 | 触る場所 | 注意 |
+|---|---|---|
+| 週案ビュー | `showWeek/renderWeek` ／ `Cards.klass`・`period` | 位置は **クラス × 時限 × 日付(start)** で決まる。クラス一覧は Script Property `CLASSES`（`getClasses/setClasses`）。空だと何も出ないので設定画面へ誘導している |
+| 変更履歴 | `History` シート ／ `recordHistory_` | `updateCard` の中で**変更前を先に読んでから**書き込む。順序を逆にすると差分が取れない。`HISTORY_FIELDS` の項目だけ記録し、上限2000行で古い方から剪定。**履歴の失敗が本体の保存を壊さないよう try で包んである** |
+| Gmail取り込み | `importGmailNow` ／ トリガー1時間ごと | 二重取り込み防止は**ラベルの付け替え**（元ラベルを外し `MyTrello済み` を付ける）で実現。実行時間の上限があるので**1回20件で打ち切り**、残りは次回 |
+| AI週次棚卸し | `aiWeeklyReview` ／ 日曜20時 | **既存カードは絶対に書き換えない**（提案カードを置くだけ）。置き場所は `AIREVIEW_LIST`。`boardDigest_()` が盤面を要点だけのテキストに圧縮（最大400枚） |
+| 自然文一括操作 | `aiPlanBulk` / `aiApplyBulk` | **必ず2段階**。plan は何も変更しない。実在するカードIDと許可キー(`due/start/done/archived/title`)だけに絞り込むフィルタが安全弁。実行後は履歴から個別に戻せる |
+| 意味検索 | `embedText_` / `reindexEmbeddings` / `semanticSearch` | 埋め込みは `Cards.embedding`。**`parseCard_` で削除してクライアントへ送らない**（重いため）。`embHash` で差分のみ再計算し、`updateCard` で本文が変わると空にして再計算対象へ。1回25件ずつ回す |
 
 ---
 
