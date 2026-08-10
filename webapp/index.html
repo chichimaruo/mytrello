@@ -31,12 +31,18 @@
     <button id="setBtn" class="ghost-btn">⚙ 設定</button>
     <button id="archBtn" class="ghost-btn">🗄 アーカイブ</button>
     <button id="reloadBtn" class="ghost-btn" title="最新に更新">🔄</button>
-    <span id="currentBoardName" class="board-name"></span>
     <span class="sep">｜</span>
     <button id="addListBtn" class="ghost-btn">＋ リスト追加</button>
     <button id="collapseAllBtn" class="ghost-btn" title="全リストを折りたたむ/展開">⊟ 全部畳む</button>
     <span id="status"></span>
   </header>
+
+  <!-- いま開いているボード（ボタンに埋もれない専用の行。クリックでボード一覧） -->
+  <div id="boardBar" title="クリックでボード一覧を開く">
+    <span id="boardBarDot" class="board-dot"></span>
+    <span id="currentBoardName" class="board-name"></span>
+    <span class="board-bar-hint">切り替える ▾</span>
+  </div>
 
   <div id="loadError" class="load-error hidden">
     <span id="loadErrorMsg">読み込みに失敗しました。</span>

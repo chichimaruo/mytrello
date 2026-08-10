@@ -18,7 +18,20 @@
   }
   #brand { font-weight: 700; font-size: 18px; }
   #status { margin-left: auto; font-size: 12px; opacity: .85; }
-  .board-name { font-weight: 700; font-size: 16px; color: #fff; max-width: 32vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .board-name { font-weight: 700; font-size: 16px; color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* いま開いているボードを示す帯。上部バーのボタン群とは別の行なので、
+     ボタンが増えても横スクロールしても、名前が隠れることがない。 */
+  #boardBar {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 9px; cursor: pointer;
+    padding: 7px calc(14px + env(safe-area-inset-right)) 7px calc(14px + env(safe-area-inset-left));
+    background: rgba(0,0,0,.28); color: #fff;
+    border-bottom: 1px solid rgba(255,255,255,.12);
+  }
+  #boardBar:hover { background: rgba(0,0,0,.38); }
+  .board-dot { flex: 0 0 auto; width: 12px; height: 12px; border-radius: 50%; background: transparent; box-shadow: 0 0 0 2px rgba(255,255,255,.35); }
+  #boardBar .board-name { flex: 1 1 auto; min-width: 0; }
+  .board-bar-hint { flex: 0 0 auto; font-size: 11px; opacity: .75; }
   .sep { color: rgba(255,255,255,.5); }
 
   /* オーバーレイ（ボード一覧 / カレンダー） */
@@ -599,7 +612,10 @@
     #topbar::-webkit-scrollbar { display: none; }
     #brand, #status, #topbar .sep { display: none; }
     #topbar .ghost-btn { flex: 0 0 auto; white-space: nowrap; font-size: 13px; padding: 7px 11px; background: rgba(255,255,255,.16); }
-    .board-name { order: -1; max-width: 42vw; font-size: 15px; }
+    /* ボード名は #boardBar（上部バーとは別の行）へ移したので、
+       かつての order:-1 / max-width は不要。幅いっぱいに出す。 */
+    .board-name { font-size: 15px; }
+    #boardBar { padding-top: 6px; padding-bottom: 6px; background: rgba(0,0,0,.4); }
 
     /* リスト */
     .list { background: rgba(33,34,38,.94); border-radius: 12px; }

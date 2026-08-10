@@ -55,7 +55,11 @@ function ensureCurrentBoard() {
 function updateBoardName() {
   const b = STATE.boards.find(function (x) { return x.id === currentBoardId; });
   const node = document.getElementById('currentBoardName');
-  if (node) node.textContent = b ? b.title : '';
+  if (node) node.textContent = b ? b.title : '（ボードが選ばれていません）';
+  // 横断ビューと同じ色分けを添えて、名前を読まなくても違いが分かるようにする
+  const dot = document.getElementById('boardBarDot');
+  if (dot) dot.style.background = b ? boardColor(b.id) : 'transparent';
+  document.title = b ? (b.title + ' — My Trello') : 'My Trello';
 }
 
 // 現在のボードの背景を適用（画像があれば画像、なければ標準グラデ）
@@ -3521,6 +3525,7 @@ function bindUI() {
 
   // ボード一覧（ホーム）
   $('#homeBtn').addEventListener('click', showHome);
+  $('#boardBar').addEventListener('click', showHome);   // 名前をクリックしても切り替えられる
   $('#boardHome').addEventListener('click', function (e) {
     if (e.target.id === 'boardHome') hideHome(); // 背景クリックで閉じる
   });
