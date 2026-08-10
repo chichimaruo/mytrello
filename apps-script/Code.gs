@@ -68,7 +68,6 @@ const API_ALLOWED = {
   exportAll: 1, healthCheck: 1, copyBoard: 1,
   getCardHistory: 1, revertHistory: 1,
   getClasses: 1, setClasses: 1, distributeLesson: 1,
-  sampleStatus: 1, createWeekSample: 1, deleteWeekSample: 1,
   gmailImportStatus: 1, enableGmailImport: 1, disableGmailImport: 1, importGmailNow: 1,
   aiReviewStatus: 1, enableAiReview: 1, disableAiReview: 1, aiWeeklyReview: 1,
   aiPlanBulk: 1, aiApplyBulk: 1,
@@ -779,129 +778,6 @@ function distributeLesson(cardId, targets) {
     if (made.length) appendRows_(sh, 'Cards', made);
     return made.map(function (o) { return parseCard_(o); });
   });
-}
-
-/* ====================== 週案のサンプルデータ ====================== */
-// 「使ってみないと分からない」ための見本。専用ボードを1枚作るだけなので、
-// 既存のボードには一切触れない。deleteWeekSample() で跡形なく消せる。
-
-const SAMPLE_CLASSES = ['1年1組', '1年2組', '1年3組'];
-const SAMPLE_LESSONS = [
-  '第1時 曲との出会い／通して聴く',
-  '第2時 主題を歌ってつかむ',
-  '第3時 場面の移り変わりを聴き取る',
-  '第4時 楽器の音色と情景を結びつける',
-  '第5時 標題音楽としての工夫を考える',
-  '第6時 まとめ／自分の言葉で語る'
-];
-// クラスごとの「毎週の授業枠」＝ [曜日(0=月), 時限] を週2コマ分
-const SAMPLE_SLOTS = {
-  '1年1組': [[0, 2], [3, 1]],   // 月2限・木1限
-  '1年2組': [[1, 3], [4, 2]],   // 火3限・金2限
-  '1年3組': [[2, 4], [4, 5]]    // 水4限・金5限
-};
-// わざと進度に差をつける（遅れの表示を見てもらうため）
-const SAMPLE_DONE = { '1年1組': 4, '1年2組': 3, '1年3組': 2 };
-
-function sampleStatus() {
-  const id = PROP.getProperty('SAMPLE_BOARD_ID');
-  if (!id) return { exists: false };
-  const b = sheetObjects_(getSS_().getSheetByName('Boards')).filter(function (x) { return x.id === id; })[0];
-  return b ? { exists: true, boardId: id, title: b.title } : { exists: false };
-}
-
-function createWeekSample() {
-  return withLock_(function () {
-    if (PROP.getProperty('SAMPLE_BOARD_ID')) throw new Error('サンプルはすでに入っています。先に削除してください。');
-
-    const ss = getSS_();
-    const now = new Date();
-    const iso = now.toISOString();
-
-    // 今週の月曜（先週=-7, 来週=+7 に授業を散らして、週の移動も試せるようにする）
-    const monday = new Date(now); monday.setHours(0, 0, 0, 0);
-    monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
-
-    // --- ボード ---
-    const bsh = ss.getSheetByName('Boards');
-    const boardId = Utilities.getUuid();
-    const maxPos = sheetObjects_(bsh).reduce(function (m, o) { return Math.max(m, Number(o.position) || 0); }, -1);
-    bsh.appendRow(rowFromObject_('Boards', {
-      id: boardId, title: '🗓 週案サンプル（削除OK）', position: maxPos + 1,
-      archived: false, createdAt: iso, background: '', shareToken: ''
-    }));
-
-    // --- リスト（前回おすすめした「準備の状態」で並べる）---
-    const lsh = ss.getSheetByName('Lists');
-    const listNames = ['教材準備中', '印刷済み', '実施済', '振り返り記入済'];
-    const listIds = {};
-    const listRows = listNames.map(function (n, i) {
-      const id = Utilities.getUuid(); listIds[n] = id;
-      return { id: id, title: n, position: i, archived: false, boardId: boardId, wip: 0, collapsed: false };
-    });
-    appendRows_(lsh, 'Lists', listRows);
-
-    // --- 授業カード（3クラス × 6時＝18枚）---
-    const csh = ss.getSheetByName('Cards');
-    const cards = [];
-    let pos = 0;
-
-    SAMPLE_CLASSES.forEach(function (klass) {
-      const slots = SAMPLE_SLOTS[klass];
-      const doneCount = SAMPLE_DONE[klass];
-
-      SAMPLE_LESSONS.forEach(function (title, n) {
-        const weekOffset = Math.floor(n / 2) - 1;          // 0,1→先週 / 2,3→今週 / 4,5→来週
-        const slot = slots[n % 2];
-        const d = new Date(monday);
-        d.setDate(monday.getDate() + weekOffset * 7 + slot[0]);
-
-        const isDone = n < doneCount;
-        let desc = 'スメタナ「ブルタバ（モルダウ）」の鑑賞　全6時間扱いのサンプルです。\n';
-        if (isDone) {
-          desc += '\n## 振り返り\n- 良かった点：主題を口ずさめる生徒が増えた\n'
-                + '- 直す点：音源が長いので、聴かせる範囲を絞る\n';
-        } else {
-          desc += '\n## 準備メモ\n- 音源とワークシートを用意する\n- 板書は場面の順にそろえる\n';
-        }
-
-        cards.push({
-          id: Utilities.getUuid(),
-          listId: isDone ? listIds['実施済'] : listIds['教材準備中'],
-          title: title, desc: desc, position: pos++,
-          labels: '[]', due: '', checklist: '[]', comments: '[]',
-          createdAt: iso, updatedAt: iso, archived: false, attachments: '[]',
-          start: toYmd_(d), allDay: true, done: isDone,
-          ratings: '{}', fields: '{}', cover: '', template: false, links: '[]', sync: '{}', places: '[]',
-          deleted: false, klass: klass, period: slot[1], embedding: '', embHash: ''
-        });
-      });
-    });
-    appendRows_(csh, 'Cards', cards);
-
-    // --- クラス設定（既存の設定は退避して、消すときに元へ戻す）---
-    const before = PROP.getProperty('CLASSES') || '';
-    PROP.setProperty('CLASSES_BEFORE_SAMPLE', before);
-    const cur = parseJson_(before, []);
-    const merged = cur.slice();
-    SAMPLE_CLASSES.forEach(function (k) { if (merged.indexOf(k) < 0) merged.push(k); });
-    PROP.setProperty('CLASSES', JSON.stringify(merged));
-
-    PROP.setProperty('SAMPLE_BOARD_ID', boardId);
-    return { boardId: boardId, cards: cards.length, classes: merged };
-  });
-}
-
-function deleteWeekSample() {
-  const id = PROP.getProperty('SAMPLE_BOARD_ID');
-  if (!id) return false;
-  deleteBoard(id);                       // リストとカードも一緒に消える
-  const before = PROP.getProperty('CLASSES_BEFORE_SAMPLE');
-  if (before === null || before === undefined || before === '') PROP.deleteProperty('CLASSES');
-  else PROP.setProperty('CLASSES', before);
-  PROP.deleteProperty('CLASSES_BEFORE_SAMPLE');
-  PROP.deleteProperty('SAMPLE_BOARD_ID');
-  return true;
 }
 
 /* ====================== 背景画像検索 (Wikimedia Commons) ====================== */

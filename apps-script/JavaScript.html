@@ -347,7 +347,6 @@ function showSettings() {
   loadShareSection();
   loadBackupStatus();
   refreshGmailStatus();
-  refreshSampleStatus();
   loadClasses().then(function (ks) { $('#classList').value = ks.join('、'); });
   document.getElementById('settings').classList.remove('hidden');
 }
@@ -3078,8 +3077,7 @@ function renderWeek() {
 
   if (!CLASSES.length) {
     body.appendChild(el('div', 'set-note',
-      'クラスがまだ設定されていません。⚙設定 →「🗓 週案のクラス」で登録してください。<br>'
-      + '使い方のイメージがつかめないときは、同じ場所の<b>「サンプルを入れる」</b>が手早いです。'));
+      'クラスがまだ設定されていません。⚙設定 →「🗓 週案のクラス」で登録してください。'));
     $('#weekProgress').innerHTML = '';
     return;
   }
@@ -3260,65 +3258,6 @@ function renderKlassPeriod(card) {
     if (Number(card.period) === p) o.selected = true;
     ps.appendChild(o);
   });
-}
-
-/* --------------------------- 週案サンプル --------------------------- */
-async function refreshSampleStatus() {
-  const t = $('#sampleStatusText'); if (!t) return;
-  let s = {};
-  try { s = await api.sampleStatus(); } catch (e) { return; }
-  t.innerHTML = s.exists
-    ? '現在：<b>入っています</b>（ボード「' + esc(s.title) + '」）'
-    : '現在：入っていません';
-}
-
-async function addWeekSample() {
-  if (!confirm('見本用のボード「🗓 週案サンプル」を1枚作ります。\n'
-    + '3クラス × 6時間ぶんの授業カード（先週・今週・来週）が入ります。\n'
-    + 'いまのボードには何も起きません。よろしいですか?')) return;
-  setStatus('サンプルを作成中...');
-  try {
-    const r = await api.createWeekSample();
-    // ボードとリストが増えたので取り直して、そのまま見本ボードを開く
-    const meta = await api.getMeta();
-    STATE.boards = meta.boards; STATE.lists = meta.lists;
-    STATE.labels = meta.labels; STATE.fields = meta.fields;
-    STATE.views = meta.views; STATE.automations = meta.automations; STATE.recurring = meta.recurring;
-    currentBoardId = r.boardId; saveCurrentBoard(r.boardId);
-    await reloadCurrentBoardCards();
-    invalidateAllCards();
-    await loadClasses();
-    await refreshSampleStatus();
-    $('#classList').value = CLASSES.join('、');
-    hideSettings();
-    render();
-    weekRef = new Date();
-    showWeek();
-    setStatus('サンプルを入れました（' + r.cards + '枚）');
-  } catch (e) { alert(e); setStatus(''); }
-}
-
-async function delWeekSample() {
-  if (!confirm('サンプルのボードごと削除します。クラス設定も元に戻ります。よろしいですか?')) return;
-  setStatus('削除中...');
-  try {
-    await api.deleteWeekSample();
-    const meta = await api.getMeta();
-    STATE.boards = meta.boards; STATE.lists = meta.lists;
-    STATE.labels = meta.labels; STATE.fields = meta.fields;
-    STATE.views = meta.views; STATE.automations = meta.automations; STATE.recurring = meta.recurring;
-    const first = STATE.boards.filter(function (b) { return !b.archived; })[0];
-    currentBoardId = first ? first.id : null;
-    if (currentBoardId) saveCurrentBoard(currentBoardId);
-    await reloadCurrentBoardCards();
-    invalidateAllCards();
-    await loadClasses();
-    await refreshSampleStatus();
-    $('#classList').value = CLASSES.join('、');
-    hideWeek();
-    render();
-    setStatus('サンプルを削除しました');
-  } catch (e) { alert(e); setStatus(''); }
 }
 
 /* --------------------------- 一括展開（他のクラスへ配る） --------------------------- */
@@ -3657,9 +3596,6 @@ function bindUI() {
   $('#m-dist-btn').addEventListener('click', showDistPanel);
   $('#m-dist-cancel').addEventListener('click', hideDistPanel);
   $('#m-dist-run').addEventListener('click', runDistribute);
-
-  $('#sampleAddBtn').addEventListener('click', addWeekSample);
-  $('#sampleDelBtn').addEventListener('click', delWeekSample);
 
   $('#classSaveBtn').addEventListener('click', async function () {
     const raw = $('#classList').value;
