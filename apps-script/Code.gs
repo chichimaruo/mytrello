@@ -77,7 +77,7 @@ const API_ALLOWED = {
   archiveAllCards: 1, setListWip: 1, setListCollapsed: 1, setAllListsCollapsed: 1, saveListOrder: 1,
   addCard: 1, updateCard: 1, deleteCard: 1, moveCard: 1, moveCardToList: 1, copyCard: 1, saveCardOrder: 1,
   addLabel: 1, deleteLabel: 1,
-  addField: 1, deleteField: 1,
+  addField: 1, updateField: 1, deleteField: 1,
   addView: 1, updateView: 1, deleteView: 1,
   addAutomation: 1, deleteAutomation: 1,
   addRecurring: 1, deleteRecurring: 1,

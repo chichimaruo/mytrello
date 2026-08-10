@@ -1456,6 +1456,10 @@ function renderFields(card) {
     const row = el('div', 'rating-row');
     const head = el('div', 'rating-head');
     head.appendChild(el('span', 'rating-name', esc(f.name)));
+    const edit = el('button', 'rating-del', '✏️');
+    edit.title = 'このフィールドを編集（名前・選択肢など）';
+    edit.addEventListener('click', function () { showFieldForm(f); });
+    head.appendChild(edit);
     const del = el('button', 'rating-del', '🗑');
     del.title = 'フィールドを削除';
     del.addEventListener('click', function () {
@@ -1536,15 +1540,43 @@ function setFieldValue(card, fieldId, value) {
 }
 
 /* フィールド追加フォーム */
-function renderFieldConfig() {
+// このフィールドの値が、いま何枚のカードで使われているかを数える
+function fieldValueUsage(fieldId) {
+  const counts = {};
+  STATE.cards.forEach(function (c) {
+    if (c.archived) return;
+    const v = c.fields && c.fields[fieldId];
+    if (v === undefined || v === null || v === '') return;
+    counts[v] = (counts[v] || 0) + 1;
+  });
+  return counts;
+}
+
+// field を渡すと「編集」、渡さないと「新規追加」の設定欄になる
+function renderFieldConfig(field) {
   const cont = $('#m-field-config');
   cont.innerHTML = '';
   const type = $('#m-field-type').value;
+  if (field) {
+    cont.appendChild(el('div', 'set-note',
+      '種類（' + esc(field.type) + '）は後から変えられません。'
+      + '変えたい場合は、新しく作り直してください。'));
+  }
   if (type === 'select') {
     cont.appendChild(el('div', 'qe-sub-label', '選択肢（カンマ区切り）'));
     const inp = el('input', 'field-input'); inp.id = 'm-field-options';
     inp.placeholder = '例: 浅煎り, 中煎り, 深煎り';
+    if (field) inp.value = ((field.config && field.config.options) || []).join(', ');
     cont.appendChild(inp);
+    if (field) {
+      // いま使われている値を見せておくと、うっかり消してしまう事故が減る
+      const counts = fieldValueUsage(field.id);
+      const used = Object.keys(counts);
+      if (used.length) {
+        cont.appendChild(el('div', 'set-note', '使用中：'
+          + used.map(function (v) { return esc(v) + '（' + counts[v] + '枚）'; }).join('　/　')));
+      }
+    }
   } else if (type === 'rating') {
     const rowEl = el('div', 'rating-form-row');
     const sel = el('select'); sel.id = 'm-field-rstyle';
@@ -1553,27 +1585,42 @@ function renderFieldConfig() {
     });
     const maxLbl = el('label', 'rating-max'); maxLbl.appendChild(document.createTextNode('最大：'));
     const maxInp = el('input'); maxInp.type = 'number'; maxInp.id = 'm-field-rmax';
-    maxInp.min = '2'; maxInp.max = '10'; maxInp.value = '5';
+    maxInp.min = '2'; maxInp.max = '10';
+    maxInp.value = String((field && field.config && Number(field.config.max)) || 5);
+    if (field && field.config && field.config.style) sel.value = field.config.style;
     maxLbl.appendChild(maxInp);
     rowEl.appendChild(sel); rowEl.appendChild(maxLbl);
     cont.appendChild(rowEl);
   }
 }
 
-function showFieldForm() {
-  $('#m-field-name').value = '';
-  $('#m-field-type').value = 'text';
-  $('#m-field-front').checked = true;
-  renderFieldConfig();
+// 編集中のフィールドID（null なら新規追加）
+let editingFieldId = null;
+
+function showFieldForm(field) {
+  // 一覧の✏️から呼ばれると field が入る。＋ボタンから呼ばれると undefined。
+  const f = (field && field.id) ? field : null;
+  editingFieldId = f ? f.id : null;
+  $('#m-field-name').value = f ? f.name : '';
+  $('#m-field-type').value = f ? f.type : 'text';
+  $('#m-field-type').disabled = !!f;      // 種類を変えると既存の値の意味が壊れるので触らせない
+  $('#m-field-front').checked = f ? (f.showFront !== false) : true;
+  renderFieldConfig(f);
+  $('#m-field-save').textContent = f ? '保存' : '追加';
   $('#m-field-form').classList.remove('hidden');
   $('#m-field-name').focus();
 }
 function hideFieldForm() {
   const f = $('#m-field-form');
   if (f) f.classList.add('hidden');
+  editingFieldId = null;
+  const t = $('#m-field-type');
+  if (t) t.disabled = false;
+  const b = $('#m-field-save');
+  if (b) b.textContent = '追加';
 }
 
-async function saveNewField() {
+async function saveFieldForm() {
   const name = $('#m-field-name').value.trim();
   if (!name) { $('#m-field-name').focus(); return; }
   if (!currentBoardId) return;
@@ -1582,17 +1629,40 @@ async function saveNewField() {
   const config = {};
   if (type === 'select') {
     const raw = $('#m-field-options') ? $('#m-field-options').value : '';
-    config.options = raw.split(',').map(function (s) { return s.trim(); }).filter(function (s) { return s; });
+    config.options = raw.split(/[,、]/).map(function (s) { return s.trim(); }).filter(function (s) { return s; });
   } else if (type === 'rating') {
     config.style = $('#m-field-rstyle').value;
     let m = parseInt($('#m-field-rmax').value, 10);
     if (!(m >= 2)) m = 5; if (m > 10) m = 10;
     config.max = m;
   }
+
+  const card = currentCard();
+
+  if (editingFieldId) {
+    // 使われている選択肢が消えるときは、黙って進めず知らせる
+    if (type === 'select') {
+      const counts = fieldValueUsage(editingFieldId);
+      const gone = Object.keys(counts).filter(function (v) { return config.options.indexOf(v) < 0; });
+      if (gone.length) {
+        const list = gone.map(function (v) { return v + '（' + counts[v] + '枚）'; }).join('、');
+        if (!confirm('次の選択肢が一覧から無くなります：' + list
+          + '。該当カードの値そのものは残りますが、ドロップダウンでは選び直すまで表示されません。続けますか?')) return;
+      }
+    }
+    await api.updateField(editingFieldId, { name: name, config: config, showFront: showFront });
+    const f = STATE.fields.find(function (x) { return x.id === editingFieldId; });
+    if (f) { f.name = name; f.config = config; f.showFront = showFront; }
+    hideFieldForm();
+    if (card) { renderFields(card); refreshCardNode(card); }
+    render();                       // カード表面の表示も作り直す
+    setStatus('フィールドを更新しました');
+    return;
+  }
+
   const field = await api.addField(currentBoardId, name, type, config, showFront);
   STATE.fields.push(field);
   hideFieldForm();
-  const card = currentCard();
   if (card) renderFields(card);
   setStatus('フィールドを追加しました');
 }
@@ -3861,12 +3931,12 @@ function bindUI() {
   });
 
   // カスタムフィールドの追加
-  $('#m-field-add-btn').addEventListener('click', showFieldForm);
+  $('#m-field-add-btn').addEventListener('click', function () { showFieldForm(null); });
   $('#m-field-cancel').addEventListener('click', hideFieldForm);
-  $('#m-field-save').addEventListener('click', saveNewField);
-  $('#m-field-type').addEventListener('change', renderFieldConfig);
+  $('#m-field-save').addEventListener('click', saveFieldForm);
+  $('#m-field-type').addEventListener('change', function () { renderFieldConfig(null); });
   $('#m-field-name').addEventListener('keydown', function (e) {
-    if (e.key === 'Enter') { e.preventDefault(); saveNewField(); }
+    if (e.key === 'Enter') { e.preventDefault(); saveFieldForm(); }
   });
 
   $('#m-title').addEventListener('change', function () {
