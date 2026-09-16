@@ -17,19 +17,33 @@ function configureApi() {
   localStorage.setItem('apiToken', (t || '').trim());
   return true;
 }
+// 読み取りだけの関数かどうか（書き込みは二重登録の恐れがあるので再試行しない）
+function isReadOnlyFn(fn) {
+  return /^(get|is|has)/.test(fn) || fn === 'apiPing' || fn === 'healthCheck' || fn === 'inspectCardsRaw';
+}
+function callApi(fn, args) {
+  return fetch(getApiUrl(), {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ fn: fn, args: args, token: getApiToken() })
+  }).then(function (res) { return res.json(); })
+    .then(function (data) {
+      if (data && data.ok) return data.result;
+      throw new Error((data && data.error) || 'APIエラー');
+    });
+}
 const api = new Proxy({}, {
   get: function (_t, fn) {
     if (typeof fn !== 'string') return undefined;
     return function (...args) {
-      return fetch(getApiUrl(), {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ fn: fn, args: args, token: getApiToken() })
-      }).then(function (res) { return res.json(); })
-        .then(function (data) {
-          if (data && data.ok) return data.result;
-          throw new Error((data && data.error) || 'APIエラー');
+      return callApi(fn, args).catch(function (e) {
+        // Apps Script は再デプロイの瞬間や高負荷時に一時的に届かないことがある
+        // （TypeError: Failed to fetch）。読み取りだけ、少し待って1回だけやり直す。
+        if (!isReadOnlyFn(fn)) throw e;
+        return new Promise(function (r) { setTimeout(r, 2500); }).then(function () {
+          return callApi(fn, args);
         });
+      });
     };
   }
 });
@@ -618,12 +632,21 @@ function mergeCards(newCards) {
 }
 
 // 全カードが揃うのを保証（横断ビュー/ボード切替の前に呼ぶ）
+// 通信が復活したらエラー表示を引っ込める。
+// これまでは init() の中でしか消しておらず、一度出ると
+// その後うまく通信できても出たままだった（2026-09-16）。
+function clearLoadError() {
+  const box = document.getElementById('loadError');
+  if (box) box.classList.add('hidden');
+}
+
 function ensureAllCards() {
   if (allCardsLoaded) return Promise.resolve();
   if (allCardsPromise) return allCardsPromise;
   allCardsPromise = api.getAllCards().then(function (all) {
     mergeCards(all);
     allCardsLoaded = true;
+    clearLoadError();
   }).catch(function (e) { allCardsPromise = null; throw e; });
   return allCardsPromise;
 }
@@ -670,7 +693,7 @@ async function reloadData() {
   try {
     STATE = await api.getState();
     markAllLoaded();
-    $('#loadError').classList.add('hidden');
+    clearLoadError();
     render();
     if (openCardId) renderModal();
     setStatus('最新に更新しました');
@@ -702,6 +725,9 @@ function labelById(id) {
 }
 
 function render() {
+  // 盤面を描けている時点でデータは届いている。
+  // 前の失敗の表示が残っていたら、ここで消す。
+  if (STATE && STATE.boards && STATE.boards.length) clearLoadError();
   ensureCurrentBoard();
   updateBoardName();
   applyBackground();
@@ -2878,6 +2904,7 @@ async function reloadCurrentBoardCards() {
     const fresh = await api.getCards(currentBoardId);
     const ids = {}; STATE.lists.forEach(function (l) { if (l.boardId === currentBoardId) ids[l.id] = 1; });
     STATE.cards = STATE.cards.filter(function (c) { return !ids[c.listId]; }).concat(fresh.map(normalizeCard));
+    clearLoadError();
   } catch (e) {}
 }
 

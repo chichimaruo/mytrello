@@ -130,19 +130,33 @@ function configureApi() {
   localStorage.setItem('apiToken', (t || '').trim());
   return true;
 }
+// 読み取りだけの関数かどうか（書き込みは二重登録の恐れがあるので再試行しない）
+function isReadOnlyFn(fn) {
+  return /^(get|is|has)/.test(fn) || fn === 'apiPing' || fn === 'healthCheck' || fn === 'inspectCardsRaw';
+}
+function callApi(fn, args) {
+  return fetch(getApiUrl(), {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ fn: fn, args: args, token: getApiToken() })
+  }).then(function (res) { return res.json(); })
+    .then(function (data) {
+      if (data && data.ok) return data.result;
+      throw new Error((data && data.error) || 'APIエラー');
+    });
+}
 const api = new Proxy({}, {
   get: function (_t, fn) {
     if (typeof fn !== 'string') return undefined;
     return function (...args) {
-      return fetch(getApiUrl(), {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ fn: fn, args: args, token: getApiToken() })
-      }).then(function (res) { return res.json(); })
-        .then(function (data) {
-          if (data && data.ok) return data.result;
-          throw new Error((data && data.error) || 'APIエラー');
+      return callApi(fn, args).catch(function (e) {
+        // Apps Script は再デプロイの瞬間や高負荷時に一時的に届かないことがある
+        // （TypeError: Failed to fetch）。読み取りだけ、少し待って1回だけやり直す。
+        if (!isReadOnlyFn(fn)) throw e;
+        return new Promise(function (r) { setTimeout(r, 2500); }).then(function () {
+          return callApi(fn, args);
         });
+      });
     };
   }
 });"""

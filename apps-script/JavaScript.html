@@ -601,12 +601,21 @@ function mergeCards(newCards) {
 }
 
 // 全カードが揃うのを保証（横断ビュー/ボード切替の前に呼ぶ）
+// 通信が復活したらエラー表示を引っ込める。
+// これまでは init() の中でしか消しておらず、一度出ると
+// その後うまく通信できても出たままだった（2026-09-16）。
+function clearLoadError() {
+  const box = document.getElementById('loadError');
+  if (box) box.classList.add('hidden');
+}
+
 function ensureAllCards() {
   if (allCardsLoaded) return Promise.resolve();
   if (allCardsPromise) return allCardsPromise;
   allCardsPromise = api.getAllCards().then(function (all) {
     mergeCards(all);
     allCardsLoaded = true;
+    clearLoadError();
   }).catch(function (e) { allCardsPromise = null; throw e; });
   return allCardsPromise;
 }
@@ -653,7 +662,7 @@ async function reloadData() {
   try {
     STATE = await api.getState();
     markAllLoaded();
-    $('#loadError').classList.add('hidden');
+    clearLoadError();
     render();
     if (openCardId) renderModal();
     setStatus('最新に更新しました');
@@ -685,6 +694,9 @@ function labelById(id) {
 }
 
 function render() {
+  // 盤面を描けている時点でデータは届いている。
+  // 前の失敗の表示が残っていたら、ここで消す。
+  if (STATE && STATE.boards && STATE.boards.length) clearLoadError();
   ensureCurrentBoard();
   updateBoardName();
   applyBackground();
@@ -2861,6 +2873,7 @@ async function reloadCurrentBoardCards() {
     const fresh = await api.getCards(currentBoardId);
     const ids = {}; STATE.lists.forEach(function (l) { if (l.boardId === currentBoardId) ids[l.id] = 1; });
     STATE.cards = STATE.cards.filter(function (c) { return !ids[c.listId]; }).concat(fresh.map(normalizeCard));
+    clearLoadError();
   } catch (e) {}
 }
 
