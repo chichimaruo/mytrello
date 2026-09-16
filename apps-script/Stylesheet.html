@@ -484,6 +484,24 @@
 
   .theme-btn.active { background: #fff; color: #0067a3; font-weight: 700; }
 
+  /* リストの幅を変えるつまみ（右端に重ねる） */
+  .list { position: relative; }
+  .list-resizer {
+    position: absolute; top: 0; right: -4px; width: 10px; height: 100%;
+    cursor: col-resize; z-index: 3; touch-action: none;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .list-resizer::before {
+    content: '⋮'; font-size: 14px; line-height: 1; color: transparent;
+    background: rgba(0,0,0,.18); border-radius: 3px; padding: 10px 1px;
+    transition: color .12s, background .12s;
+  }
+  .list:hover .list-resizer::before { color: #fff; background: rgba(0,0,0,.32); }
+  .list-resizer:hover::before { background: #0079bf; color: #fff; }
+  /* ドラッグ中は全体の文字選択を止める（掴み損ねの防止） */
+  body.resizing-list { user-select: none; cursor: col-resize; }
+  body.resizing-list .card { pointer-events: none; }
+
   /* 週案（時間割グリッド） */
   .week-wrap { overflow-x: auto; }
   .week-table { border-collapse: collapse; font-size: 12px; }

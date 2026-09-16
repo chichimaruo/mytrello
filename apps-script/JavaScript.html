@@ -697,6 +697,7 @@ function render() {
   // 盤面を描けている時点でデータは届いている。
   // 前の失敗の表示が残っていたら、ここで消す。
   if (STATE && STATE.boards && STATE.boards.length) clearLoadError();
+  updateWidthResetBtn();
   ensureCurrentBoard();
   updateBoardName();
   applyBackground();
@@ -733,6 +734,96 @@ function toggleCollapseAll() {
   lists.forEach(function (l) { l.collapsed = collapse; });
   api.setAllListsCollapsed(currentBoardId, collapse);
   render();
+}
+
+/* --------------------------- リストの横幅 ---------------------------
+   標準は280px（CSS側）。右端のつまみを掴んで広げられる。
+   幅は端末ごとの見た目の好みなので localStorage に持つ（サーバーには送らない）。 */
+const LIST_W_KEY = 'listWidths';
+const LIST_W_DEFAULT = 280;
+const LIST_W_MIN = 200;
+const LIST_W_MAX = 900;
+
+function loadListWidths() {
+  try { return JSON.parse(localStorage.getItem(LIST_W_KEY) || '{}') || {}; }
+  catch (e) { return {}; }
+}
+function saveListWidths(w) {
+  try { localStorage.setItem(LIST_W_KEY, JSON.stringify(w)); } catch (e) {}
+}
+function listWidthOf(listId) {
+  const w = Number(loadListWidths()[listId]);
+  return (w >= LIST_W_MIN && w <= LIST_W_MAX) ? w : 0;   // 0 = 標準のまま
+}
+function applyListWidth(el2, px) {
+  // flex-basis も一緒に変えないと、flex: 0 0 280px の指定に負ける
+  el2.style.width = px ? (px + 'px') : '';
+  el2.style.flexBasis = px ? (px + 'px') : '';
+}
+function setListWidth(listId, px) {
+  const all = loadListWidths();
+  if (px) all[listId] = px; else delete all[listId];
+  saveListWidths(all);
+  updateWidthResetBtn();
+}
+// 全リストを標準幅へ戻す
+function resetListWidths() {
+  saveListWidths({});
+  const els = document.querySelectorAll('#board .list');
+  for (let i = 0; i < els.length; i++) applyListWidth(els[i], 0);
+  updateWidthResetBtn();
+  setStatus('リストの幅を戻しました');
+}
+// 幅を変えているリストが1つも無いときはボタンを隠す
+function updateWidthResetBtn() {
+  const btn = document.getElementById('widthResetBtn');
+  if (!btn) return;
+  const n = Object.keys(loadListWidths()).length;
+  btn.classList.toggle('hidden', n === 0);
+  btn.textContent = '↔ 幅を戻す（' + n + '）';
+}
+
+// リストの右端に、掴んで幅を変えるつまみを付ける
+function attachResizer(wrap, list) {
+  const bar = el('div', 'list-resizer');
+  bar.title = '左右にドラッグして幅を変える（ダブルクリックで標準に戻す）';
+  bar.addEventListener('dblclick', function (e) {
+    e.stopPropagation();
+    applyListWidth(wrap, 0); setListWidth(list.id, 0);
+  });
+  const start = function (clientX) {
+    const w0 = wrap.getBoundingClientRect().width;
+    const x0 = clientX;
+    document.body.classList.add('resizing-list');
+    const move = function (x) {
+      let w = Math.round(w0 + (x - x0));
+      w = Math.max(LIST_W_MIN, Math.min(LIST_W_MAX, w));
+      applyListWidth(wrap, w);
+      return w;
+    };
+    let last = w0;
+    const onMouseMove = function (ev) { last = move(ev.clientX); };
+    const onTouchMove = function (ev) {
+      if (ev.touches && ev.touches[0]) { last = move(ev.touches[0].clientX); ev.preventDefault(); }
+    };
+    const end = function () {
+      document.body.classList.remove('resizing-list');
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', end);
+      document.removeEventListener('touchmove', onTouchMove);
+      document.removeEventListener('touchend', end);
+      setListWidth(list.id, Math.abs(last - LIST_W_DEFAULT) < 4 ? 0 : last);
+    };
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', end);
+    document.addEventListener('touchmove', onTouchMove, { passive: false });
+    document.addEventListener('touchend', end);
+  };
+  bar.addEventListener('mousedown', function (e) { e.preventDefault(); e.stopPropagation(); start(e.clientX); });
+  bar.addEventListener('touchstart', function (e) {
+    if (e.touches && e.touches[0]) { e.stopPropagation(); start(e.touches[0].clientX); }
+  }, { passive: true });
+  wrap.appendChild(bar);
 }
 
 function renderList(list) {
@@ -782,6 +873,8 @@ function renderList(list) {
   wrap.appendChild(header);
   wrap.appendChild(cards);
   wrap.appendChild(addBtn);
+  applyListWidth(wrap, listWidthOf(list.id));   // 前回広げた幅を復元
+  attachResizer(wrap, list);
   return wrap;
 }
 
@@ -3609,6 +3702,7 @@ function bindUI() {
   // ボード一覧（ホーム）
   $('#homeBtn').addEventListener('click', showHome);
   $('#boardBar').addEventListener('click', showHome);   // 名前をクリックしても切り替えられる
+  $('#widthResetBtn').addEventListener('click', resetListWidths);
   $('#boardHome').addEventListener('click', function (e) {
     if (e.target.id === 'boardHome') hideHome(); // 背景クリックで閉じる
   });
