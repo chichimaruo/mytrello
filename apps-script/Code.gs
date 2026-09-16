@@ -66,7 +66,7 @@ const API_ALLOWED = {
   getInitial: 1, getState: 1, getMeta: 1, getCards: 1, getAllCards: 1,
   getTrash: 1, restoreCard: 1, purgeCard: 1, emptyTrash: 1,
   exportAll: 1, healthCheck: 1, copyBoard: 1,
-  getCardHistory: 1, revertHistory: 1,
+  getCardHistory: 1, revertHistory: 1, inspectCardsRaw: 1, repairCardsColumns: 1,
   getClasses: 1, setClasses: 1, distributeLesson: 1,
   gmailImportStatus: 1, enableGmailImport: 1, disableGmailImport: 1, importGmailNow: 1,
   aiReviewStatus: 1, enableAiReview: 1, disableAiReview: 1, aiWeeklyReview: 1,
@@ -2372,6 +2372,57 @@ function semanticSearch(query, topN) {
 
   scored.sort(function (a, b) { return b.score - a.score; });
   return scored.slice(0, Math.max(1, Math.min(Number(topN) || 20, 50)));
+}
+
+/* ============================ 修復 ============================ */
+
+// Cardsシートの列構成を SCHEMA.Cards ちょうどに揃える。
+// 「見出しが空」「SCHEMAに無い」「重複している」列を削除する。
+// 列を消すと見出しとデータが一緒に左へ詰まるので、
+// 見出しどおりに入っている行は自動的に正しい状態になる。
+// ※ 2026-09-16、見出しの無い列が1本紛れ込み、書き込みが1列ずれていたため追加。
+function repairCardsColumns() {
+  return withLock_(function () {
+    const sh = getSS_().getSheetByName('Cards');
+    const headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String);
+    const seen = {};
+    const del = [];
+    headers.forEach(function (h, i) {
+      if (!h || SCHEMA.Cards.indexOf(h) < 0 || seen[h]) del.push({ col: i + 1, name: h });
+      else seen[h] = true;
+    });
+    del.sort(function (a, b) { return b.col - a.col; });   // 右から消さないと番号がずれる
+    del.forEach(function (x) { sh.deleteColumn(x.col); });
+    const after = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String);
+    return {
+      deleted: del,
+      header: after,
+      matchesSchema: JSON.stringify(after) === JSON.stringify(SCHEMA.Cards)
+    };
+  });
+}
+
+/* ============================ 診断（読み取り専用） ============================ */
+
+// Cardsシートの見出し行と生のセル値をそのまま返す。
+// 「SCHEMAの順番で書き、見出し名で読む」という前提(§4)が崩れていないかを
+// 外から確かめるために使う。書き込みは一切しない。
+function inspectCardsRaw(limit, offset) {
+  const sh = getSS_().getSheetByName('Cards');
+  const lastR = sh.getLastRow(), lastC = sh.getLastColumn();
+  const off = Math.max(0, Number(offset) || 0);
+  const n = Math.min(Math.max(1, Number(limit) || 50), 250);
+  const take = Math.max(0, Math.min(n, lastR - 1 - off));
+  const header = sh.getRange(1, 1, 1, lastC).getValues()[0];
+  let rows = [];
+  if (take > 0) {
+    rows = sh.getRange(2 + off, 1, take, lastC).getValues().map(function (r) {
+      return r.map(function (v) {
+        return (Object.prototype.toString.call(v) === '[object Date]') ? toYmd_(v) : v;
+      });
+    });
+  }
+  return { header: header, rows: rows, lastRow: lastR, lastCol: lastC, schema: SCHEMA.Cards };
 }
 
 /* ============================ Utility / 復旧 ============================ */
