@@ -13,7 +13,7 @@ const SCHEMA = {
   Lists:  ['id', 'title', 'position', 'archived', 'boardId', 'wip', 'collapsed'],
   Cards:  ['id', 'listId', 'title', 'desc', 'position', 'labels',
            'due', 'checklist', 'comments', 'createdAt', 'updatedAt', 'archived',
-           'attachments', 'start', 'allDay', 'done', 'ratings', 'fields', 'cover', 'template', 'links', 'sync', 'places', 'deleted', 'klass', 'period', 'embedding', 'embHash'],
+           'attachments', 'start', 'allDay', 'done', 'ratings', 'fields', 'cover', 'template', 'links', 'sync', 'places', 'deleted', 'klass', 'period', 'embedding', 'embHash', 'rels'],
   Labels: ['id', 'name', 'color', 'boardId'],
   Fields: ['id', 'boardId', 'name', 'type', 'config', 'position', 'showFront'],
   Views: ['id', 'name', 'config', 'position'],
@@ -176,7 +176,7 @@ function ensureColumn_(sheet, colName, defaultVal) {
   }
 }
 
-const SCHEMA_VERSION = '19';
+const SCHEMA_VERSION = '20';
 
 function ensureSchema_(ss) {
   if (PROP.getProperty('SCHEMA_V') === SCHEMA_VERSION) return;
@@ -304,6 +304,10 @@ function ensureSchema_(ss) {
     h.getRange(1, 1, 1, SCHEMA.History.length).setValues([SCHEMA.History]);
     h.setFrozenRows(1);
   }
+
+  // v20: カード同士のつながり（向きと意味を持った関係）
+  //   [{to:'<cardId>', type:'flow'|'part'|'rel'}, ...]  向きは「このカード → to」
+  ensureColumn_(ss.getSheetByName('Cards'), 'rels', '[]');
 
   // v7: 汎用カスタムフィールド（ボードごと）
   ensureColumn_(ss.getSheetByName('Cards'), 'fields', '{}');
@@ -479,6 +483,7 @@ function parseCard_(c) {
   c.links       = parseJson_(c.links, []);
   c.sync        = parseJson_(c.sync, {});
   c.places      = parseJson_(c.places, []);
+  c.rels        = parseJson_(c.rels, []);
   c.deleted     = c.deleted === true || c.deleted === 'TRUE';
   c.klass       = c.klass === undefined || c.klass === null ? '' : String(c.klass);
   c.period      = Number(c.period) || 0;
@@ -717,9 +722,12 @@ function copyBoard(boardId, newTitle) {
       .filter(function (c) { return listIdMap[c.listId] && !(c.archived === true || c.archived === 'TRUE') && !isTrashed_(c); })
       .sort(function (a, b) { return (Number(a.position) || 0) - (Number(b.position) || 0); });
     const posByList = {};
+    // つながり(rels)を張り替えるため、先に「元のID → 新しいID」の対応表を作る
+    const cardIdMap = {};
+    srcCards.forEach(function (c) { cardIdMap[c.id] = Utilities.getUuid(); });
     const newCards = srcCards.map(function (c) {
       const o = {}; SCHEMA.Cards.forEach(function (k) { o[k] = c[k]; });
-      o.id = Utilities.getUuid();
+      o.id = cardIdMap[c.id];
       o.listId = listIdMap[c.listId];
       posByList[o.listId] = (posByList[o.listId] === undefined) ? 0 : posByList[o.listId] + 1;
       o.position = posByList[o.listId];
@@ -732,6 +740,11 @@ function copyBoard(boardId, newTitle) {
       const fv = parseJson_(c.fields, {}); const nf = {};
       Object.keys(fv).forEach(function (k) { nf[fieldIdMap[k] || k] = fv[k]; });
       o.fields = JSON.stringify(nf);
+
+      // つながりはコピー先のボード内で閉じさせる（コピーしなかった相手への線は捨てる）
+      const rels = parseJson_(c.rels, []).filter(function (r) { return r && cardIdMap[r.to]; })
+        .map(function (r) { return { to: cardIdMap[r.to], type: r.type || 'flow' }; });
+      o.rels = JSON.stringify(rels);
       return o;
     });
     if (newCards.length) appendRows_(csh, 'Cards', newCards);
@@ -769,7 +782,7 @@ function distributeLesson(cardId, targets) {
       o.period = Number(t.period) || 0;
       o.start = t.date || base.start;
       o.due = '';                      // 授業カードに期限は持たせない
-      o.comments = '[]'; o.attachments = '[]'; o.sync = '{}';
+      o.comments = '[]'; o.attachments = '[]'; o.sync = '{}'; o.rels = '[]';
       o.done = false; o.archived = false; o.template = false; o.deleted = false;
       o.embedding = ''; o.embHash = '';
       o.createdAt = now; o.updatedAt = now;
@@ -866,7 +879,7 @@ function addCard(listId, title) {
       id: Utilities.getUuid(), listId: listId, title: title, desc: '',
       position: maxPos + 1, labels: '[]', due: '', checklist: '[]',
       comments: '[]', createdAt: now, updatedAt: now, archived: false,
-      attachments: '[]', start: '', allDay: true, done: false, ratings: '{}', fields: '{}', cover: '', template: false, links: '[]', sync: '{}', places: '[]', deleted: false, klass: '', period: 0, embedding: '', embHash: ''
+      attachments: '[]', start: '', allDay: true, done: false, ratings: '{}', fields: '{}', cover: '', template: false, links: '[]', sync: '{}', places: '[]', deleted: false, klass: '', period: 0, embedding: '', embHash: '', rels: '[]'
     };
     sh.appendRow(rowFromObject_('Cards', card));
     return card;
@@ -891,7 +904,7 @@ function updateCard(id, fields) {
     ['title', 'desc', 'due', 'start', 'allDay', 'done', 'archived', 'template', 'klass', 'period'].forEach(function (k) {
       if (fields[k] !== undefined) sh.getRange(row, colIndex[k]).setValue(fields[k]);
     });
-    ['labels', 'checklist', 'comments', 'fields', 'cover', 'links', 'places'].forEach(function (k) {
+    ['labels', 'checklist', 'comments', 'fields', 'cover', 'links', 'places', 'rels'].forEach(function (k) {
       if (fields[k] !== undefined) {
         sh.getRange(row, colIndex[k]).setValue(JSON.stringify(fields[k]));
       }
@@ -1106,6 +1119,7 @@ function copyCard(cardId) {
     o.archived = false;
     o.template = false; // 複製したものはテンプレートにしない
     o.sync = '{}';      // 複製は連携を引き継がない
+    o.rels = '[]';      // つながりも引き継がない（同じ相手に線が二重にぶら下がるため）
     o.createdAt = now;
     o.updatedAt = now;
     sh.appendRow(rowFromObject_('Cards', o));
@@ -1117,6 +1131,7 @@ function copyCard(cardId) {
     o.attachments = [];
     o.fields = parseJson_(o.fields, {});
     o.cover = parseJson_(o.cover, null);
+    o.rels = [];
     o.allDay = !(o.allDay === false || o.allDay === 'FALSE');
     o.start = toYmd_(o.start);
     o.due = toYmd_(o.due);

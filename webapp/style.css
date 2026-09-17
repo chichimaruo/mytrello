@@ -503,6 +503,90 @@
   body.resizing-list { user-select: none; cursor: col-resize; }
   body.resizing-list .card { pointer-events: none; }
 
+
+  /* ===================== カード同士のつながり ===================== */
+  /* 盤面に重ねる線の層。画面座標で描くので position:fixed。クリックは全部透過させる */
+  .rel-layer {
+    position: fixed; inset: 0; width: 100%; height: 100%;
+    pointer-events: none; z-index: 6; overflow: visible;
+  }
+  .rel-layer path { fill: none; transition: opacity .12s; }
+  .rel-layer .rel-dim { opacity: .12; }
+  /* カードの上を通る線が読めるように、下に明るいフチを敷く */
+  .rel-layer path.rel-halo { stroke: rgba(255,255,255,.85); }
+  body.rel-on .card.rel-hot { outline: 2px solid #0079bf; outline-offset: -1px; }
+
+  /* 線を出している間だけ、線が通る隙間をつくる（ノード図のように見せる）。
+     標準の並び（リスト間12px・カード間8px）のままだと線が潰れて読めない。 */
+  body.rel-on #board { gap: 56px; }
+  body.rel-on .cards > .card { margin-bottom: 22px; }
+  /* 画面外カードの高さ推定で線の端がずれるので、その間だけ省略描画を切る */
+  body.rel-on .card { content-visibility: visible; }
+
+  .ghost-btn.on { background: #0079bf; color: #fff; }
+  .ghost-btn.on:hover { background: #026aa7; }
+
+  /* カード上のバッジ */
+  .badge.rel-blocked { background: #ffebe6; color: #bf2600; font-weight: 700; }
+  .badge.rel-ready { background: #e3fcef; color: #006644; font-weight: 700; }
+
+  /* モーダルの「つながり」欄 */
+  .rel-status { border-radius: 6px; padding: 7px 10px; font-size: 13px; margin-bottom: 8px; }
+  .rel-status.blocked { background: #ffebe6; color: #bf2600; }
+  .rel-status.ready { background: #e3fcef; color: #006644; }
+  .rel-group { margin-bottom: 8px; }
+  .rel-group-label { font-size: 11px; color: #5e6c84; font-weight: 700; margin-bottom: 3px; }
+  .rel-item {
+    display: flex; align-items: center; gap: 7px; padding: 5px 8px; border-radius: 6px;
+    background: #f4f5f7; margin-bottom: 4px; font-size: 13px;
+  }
+  .rel-item:hover { background: #e9ebee; }
+  .rel-item .rel-arrow { flex: 0 0 auto; font-weight: 700; }
+  .rel-item .rel-name { flex: 1 1 auto; min-width: 0; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rel-item .rel-name:hover { text-decoration: underline; }
+  .rel-item .rel-where { flex: 0 0 auto; font-size: 11px; color: #5e6c84; max-width: 34%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rel-item .rel-state { flex: 0 0 auto; font-size: 11px; }
+  .rel-item .rel-state.ng { color: #bf2600; font-weight: 700; }
+  .rel-item .rel-state.ok { color: #006644; }
+  .rel-item .rel-del { flex: 0 0 auto; border: 0; background: transparent; cursor: pointer; color: #6b778c; font-size: 13px; padding: 0 2px; }
+  .rel-item .rel-del:hover { color: #bf2600; }
+  .rel-empty { font-size: 12px; color: #5e6c84; margin: 2px 0 8px; }
+
+  .rel-add-row { display: flex; gap: 6px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
+  .rel-add-row select { flex: 0 0 auto; }
+  .rel-add-row input { flex: 1 1 180px; min-width: 0; }
+  .rel-results {
+    border: 1px solid #dfe1e6; border-radius: 6px; margin-top: 5px;
+    max-height: 190px; overflow-y: auto;
+  }
+  .rel-hit { padding: 6px 9px; cursor: pointer; font-size: 13px; border-bottom: 1px solid #f0f1f3; }
+  .rel-hit:last-child { border-bottom: 0; }
+  .rel-hit:hover { background: #e9f2fb; }
+  .rel-hit .rel-where { font-size: 11px; color: #5e6c84; }
+  .rel-note { font-size: 12px; color: #5e6c84; padding: 8px 9px; }
+
+  /* つながりマップ */
+  .relmap-inner { max-width: 1180px; }
+  .relmap-opt { font-size: 12px; color: #5e6c84; display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+  .relmap-body { overflow: auto; max-height: 68vh; border: 1px solid #dfe1e6; border-radius: 8px; background: #fafbfc; }
+  .relmap-body svg { display: block; }
+  .relmap-node { cursor: pointer; }
+  .relmap-node rect { fill: #fff; stroke: #c1c7d0; stroke-width: 1.5; rx: 8; }
+  .relmap-node:hover rect { stroke: #0079bf; stroke-width: 2.5; }
+  .relmap-node.done rect { fill: #f1f2f4; stroke: #b3bac5; }
+  .relmap-node.blocked rect { fill: #ffebe6; stroke: #ff8f73; }
+  .relmap-node.ready rect { fill: #e3fcef; stroke: #57d9a3; }
+  .relmap-node.crit rect { stroke: #ff8b00; stroke-width: 3; }
+  .relmap-node.focus rect { stroke: #0079bf; stroke-width: 3; }
+  .relmap-node text { font-size: 12px; fill: #172b4d; pointer-events: none; }
+  .relmap-node .relmap-sub { font-size: 10px; fill: #5e6c84; }
+  .relmap-body path { fill: none; }
+  .relmap-body path.crit { stroke-width: 3.5; }
+  .relmap-col-label { font-size: 11px; fill: #7a869a; font-weight: 700; }
+  .rel-legend { border-radius: 4px; padding: 0 4px; }
+  .rel-legend.blocked { background: #ffebe6; color: #bf2600; }
+  .rel-legend.ready { background: #e3fcef; color: #006644; }
+
   /* 週案（時間割グリッド） */
   .week-wrap { overflow-x: auto; }
   .week-table { border-collapse: collapse; font-size: 12px; }
@@ -577,6 +661,22 @@
   :root.theme-dark .overlay-title { color: #fff; }
   :root.theme-dark .modal { background: #1c1c1e; color: #e8eaed; }
   :root.theme-dark .m-label { color: #9aa0a6; }
+  :root.theme-dark .rel-layer path.rel-halo { stroke: rgba(0,0,0,.55); }
+  :root.theme-dark .rel-item { background: #2a2b2f; }
+  :root.theme-dark .rel-item:hover { background: #33343a; }
+  :root.theme-dark .rel-group-label, :root.theme-dark .rel-empty,
+  :root.theme-dark .rel-item .rel-where, :root.theme-dark .rel-note { color: #9aa0a6; }
+  :root.theme-dark .rel-results { border-color: #3a3b40; }
+  :root.theme-dark .rel-hit { border-bottom-color: #2f3035; }
+  :root.theme-dark .rel-hit:hover { background: #2f3b4a; }
+  :root.theme-dark .relmap-body { background: #131417; border-color: #3a3b40; }
+  :root.theme-dark .relmap-node rect { fill: #2a2b2f; stroke: #4a4b52; }
+  :root.theme-dark .relmap-node.done rect { fill: #202126; stroke: #3d3e45; }
+  :root.theme-dark .relmap-node.blocked rect { fill: #3d2320; stroke: #a5432c; }
+  :root.theme-dark .relmap-node.ready rect { fill: #17342a; stroke: #2f8f68; }
+  :root.theme-dark .relmap-node text { fill: #e8eaed; }
+  :root.theme-dark .relmap-node .relmap-sub { fill: #9aa0a6; }
+
   :root.theme-dark .set-note, :root.theme-dark .today-meta,
   :root.theme-dark .health-label, :root.theme-dark .trash-where { color: #9aa0a6; }
   :root.theme-dark input, :root.theme-dark textarea, :root.theme-dark select,

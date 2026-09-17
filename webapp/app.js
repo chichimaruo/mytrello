@@ -577,6 +577,7 @@ function normalizeCard(c) {
   c.attachments = Array.isArray(c.attachments) ? c.attachments : [];
   c.links = Array.isArray(c.links) ? c.links : [];
   c.places = Array.isArray(c.places) ? c.places : [];
+  c.rels = Array.isArray(c.rels) ? c.rels : [];
   if (!c.fields || typeof c.fields !== 'object') c.fields = {};
   if (!c.sync || typeof c.sync !== 'object') c.sync = {};
   if (c.cover && typeof c.cover !== 'object') c.cover = null;
@@ -728,6 +729,7 @@ function render() {
   // 盤面を描けている時点でデータは届いている。
   // 前の失敗の表示が残っていたら、ここで消す。
   if (STATE && STATE.boards && STATE.boards.length) clearLoadError();
+  buildRelIndex();          // つながりの索引（カードのバッジ計算で使う）
   updateWidthResetBtn();
   ensureCurrentBoard();
   updateBoardName();
@@ -743,6 +745,7 @@ function render() {
     .forEach(function (list) { board.appendChild(renderList(list)); });
 
   enableSorting();
+  relDrawSoon();            // つながりの線を引き直す（表示ONのときだけ）
 }
 
 function toggleCollapse(list, collapsed) {
@@ -830,6 +833,7 @@ function attachResizer(wrap, list) {
       let w = Math.round(w0 + (x - x0));
       w = Math.max(LIST_W_MIN, Math.min(LIST_W_MAX, w));
       applyListWidth(wrap, w);
+      relDrawSoon();
       return w;
     };
     let last = w0;
@@ -855,6 +859,633 @@ function attachResizer(wrap, list) {
     if (e.touches && e.touches[0]) { e.stopPropagation(); start(e.touches[0].clientX); }
   }, { passive: true });
   wrap.appendChild(bar);
+}
+
+/* ===================== カード同士のつながり（リレーション） =====================
+   カードは rels に「このカード → 相手」の向きで関係を持つ。
+     flow … このカードが終わってから相手に取りかかる（相手はこのカード待ち）
+     part … 相手はこのカードの一部（親 → 子）
+     rel  … ただの関連。順番の意味はない
+   線を引くだけでは飾りになるので、flow から「⛔待ち / 🚀着手可」を出して
+   盤面がそのまま段取り表になるようにしてある。 */
+
+const REL_TYPES = {
+  flow: { label: '流れ', mark: '⇢', color: '#0079bf', dash: '' },
+  part: { label: '内訳', mark: '▸', color: '#8e44ad', dash: '' },
+  rel:  { label: '関連', mark: '◇', color: '#8993a4', dash: '5 4' }
+};
+const REL_ORDER = ['flow', 'part', 'rel'];
+function relType(t) { return REL_TYPES[t] ? t : 'flow'; }
+
+let relsVisible = false;   // 盤面に線を出しているか
+let relDragging = false;   // カード/リストをドラッグ中（その間は線を消す）
+let relHoverId = null;     // マウスが乗っているカード（そこの線だけ濃くする）
+let relRaf = 0;
+
+// 毎回 STATE.cards を総なめしないための索引。render() と つながり編集のたびに作り直す
+let CARD_BY_ID = {};
+let REL_IN = {};           // 相手カードID → [{id:元のカードID, type}]
+
+function buildRelIndex() {
+  CARD_BY_ID = {};
+  REL_IN = {};
+  STATE.cards.forEach(function (c) { CARD_BY_ID[c.id] = c; });
+  STATE.cards.forEach(function (c) {
+    if (c.archived || c.deleted || !Array.isArray(c.rels)) return;
+    c.rels.forEach(function (r) {
+      if (!r || !r.to) return;
+      (REL_IN[r.to] = REL_IN[r.to] || []).push({ id: c.id, type: relType(r.type) });
+    });
+  });
+}
+function cardById(id) {
+  return CARD_BY_ID[id] || STATE.cards.find(function (c) { return c.id === id; });
+}
+// 消えた・アーカイブしたカードへの線は「無いもの」として扱う（掃除しなくても壊れない）
+function relLive(id) {
+  const c = cardById(id);
+  return (c && !c.archived && !c.deleted) ? c : null;
+}
+function relSameBoard(c) {
+  const l = STATE.lists.find(function (x) { return x.id === c.listId; });
+  return !!(l && !l.archived && l.boardId === currentBoardId);
+}
+
+// このカードから出ている線 / 入ってきている線
+function relOut(card, type) {
+  if (!card || !Array.isArray(card.rels)) return [];
+  const seen = {};
+  const out = [];
+  card.rels.forEach(function (r) {
+    if (!r || !r.to) return;
+    const t = relType(r.type);
+    if (type && t !== type) return;
+    const c = relLive(r.to);
+    if (!c) return;
+    const k = r.to + '|' + t;
+    if (seen[k]) return;
+    seen[k] = true;
+    out.push({ card: c, type: t });
+  });
+  return out;
+}
+function relIn(card, type) {
+  if (!card) return [];
+  const out = [];
+  (REL_IN[card.id] || []).forEach(function (r) {
+    if (type && r.type !== type) return;
+    const c = relLive(r.id);
+    if (c) out.push({ card: c, type: r.type });
+  });
+  return out;
+}
+
+// 'blocked'（前工程がまだ終わっていない）/ 'ready'（前工程が全部終わった）/ ''
+function relStatus(card) {
+  if (!card || card.done) return '';
+  const pre = relIn(card, 'flow');
+  if (!pre.length) return '';
+  return pre.some(function (p) { return !p.card.done; }) ? 'blocked' : 'ready';
+}
+
+// from → to を足すと輪（A→B→A）になるか。輪ができると「待ち」が永久に解けない
+function relWouldLoop(fromId, toId) {
+  if (fromId === toId) return true;
+  const seen = {};
+  const stack = [toId];
+  while (stack.length) {
+    const id = stack.pop();
+    if (id === fromId) return true;
+    if (seen[id]) continue;
+    seen[id] = true;
+    const c = cardById(id);
+    if (!c || !Array.isArray(c.rels)) continue;
+    c.rels.forEach(function (r) {
+      if (r && r.to && relType(r.type) !== 'rel') stack.push(r.to);
+    });
+  }
+  return false;
+}
+
+// 盤面を描き直す（横スクロール位置は保つ）
+function relRerender() {
+  const b = $('#board');
+  const x = b ? b.scrollLeft : 0;
+  render();
+  if (b) b.scrollLeft = x;
+}
+
+function relAdd(fromId, toId, type) {
+  const from = cardById(fromId), to = cardById(toId);
+  if (!from || !to || fromId === toId) return Promise.resolve(false);
+  type = relType(type);
+  const dup = (from.rels || []).some(function (r) {
+    return r && r.to === toId && relType(r.type) === type;
+  });
+  if (dup) { setStatus('すでにつながっています'); return Promise.resolve(false); }
+  const back = (to.rels || []).some(function (r) {
+    return r && r.to === fromId && relType(r.type) === type;
+  });
+  if (back) { setStatus('逆向きで、すでにつながっています'); return Promise.resolve(false); }
+  if (type !== 'rel' && relWouldLoop(fromId, toId)) {
+    alert('この向きでつなぐと、ぐるっと一周してしまいます（A→B→A）。「待ち」が永久に解けなくなるので、つなげません。');
+    return Promise.resolve(false);
+  }
+  from.rels = (Array.isArray(from.rels) ? from.rels : []).concat([{ to: toId, type: type }]);
+  setStatus('保存中...');
+  return api.updateCard(from.id, { rels: from.rels }).then(function () {
+    buildRelIndex();
+    setStatus('つなげました');
+    return true;
+  });
+}
+
+function relRemove(fromId, toId, type) {
+  const from = cardById(fromId);
+  if (!from || !Array.isArray(from.rels)) return Promise.resolve(false);
+  const t = relType(type);
+  from.rels = from.rels.filter(function (r) {
+    return !(r && r.to === toId && relType(r.type) === t);
+  });
+  setStatus('保存中...');
+  return api.updateCard(from.id, { rels: from.rels }).then(function () {
+    buildRelIndex();
+    setStatus('つながりを外しました');
+    return true;
+  });
+}
+
+/* ---------------------- カード詳細の「つながり」欄 ---------------------- */
+
+function relListName(listId) {
+  const l = STATE.lists.find(function (x) { return x.id === listId; });
+  return l ? l.title : '';
+}
+
+function relItemNode(other, type, ownerId, targetId, mark) {
+  const row = el('div', 'rel-item');
+  row.appendChild(el('span', 'rel-arrow', mark || REL_TYPES[type].mark));
+  const name = el('span', 'rel-name', esc(other.title));
+  name.title = 'このカードを開く';
+  name.addEventListener('click', function () { openModal(other.id); });
+  row.appendChild(name);
+  row.appendChild(el('span', 'rel-where', esc(relListName(other.listId))));
+  row.appendChild(el('span', 'rel-state ' + (other.done ? 'ok' : 'ng'), other.done ? '✓ 完了' : '未完了'));
+  const del = el('button', 'rel-del', '✕');
+  del.title = 'このつながりを外す';
+  del.addEventListener('click', function () {
+    relRemove(ownerId, targetId, type).then(function () {
+      const cur = currentCard();
+      if (cur) renderRels(cur);
+      relRerender();
+    });
+  });
+  row.appendChild(del);
+  return row;
+}
+
+function renderRels(card) {
+  buildRelIndex();
+  if (!card) return;
+
+  // 状態の一言（⛔待ち / 🚀着手可）
+  const sBox = $('#m-rel-status');
+  const st = relStatus(card);
+  sBox.className = st ? ('rel-status ' + st) : '';
+  if (st === 'blocked') {
+    const ng = relIn(card, 'flow').filter(function (p) { return !p.card.done; })
+      .map(function (p) { return '「' + esc(p.card.title) + '」'; }).join('');
+    sBox.innerHTML = '⛔ 待ち — 先に ' + ng + ' を終わらせてからです。';
+  } else if (st === 'ready') {
+    sBox.innerHTML = '🚀 着手可 — 前のカードは全部終わっています。今すぐ動けます。';
+  } else {
+    sBox.innerHTML = '';
+  }
+
+  const relBoth = relOut(card, 'rel').map(function (x) {
+    return { card: x.card, owner: card.id, target: x.card.id };
+  }).concat(relIn(card, 'rel').map(function (x) {
+    return { card: x.card, owner: x.card.id, target: card.id };
+  }));
+
+  const groups = [
+    { label: '⇠ このカードの前（終わってから着手する）', type: 'flow', mark: '⇠',
+      items: relIn(card, 'flow').map(function (x) { return { card: x.card, owner: x.card.id, target: card.id }; }) },
+    { label: '⇢ このカードの次（これが終わると動ける）', type: 'flow', mark: '⇢',
+      items: relOut(card, 'flow').map(function (x) { return { card: x.card, owner: card.id, target: x.card.id }; }) },
+    { label: '▸ このカードの内訳', type: 'part', mark: '▸',
+      items: relOut(card, 'part').map(function (x) { return { card: x.card, owner: card.id, target: x.card.id }; }) },
+    { label: '▴ このカードが属するまとまり', type: 'part', mark: '▴',
+      items: relIn(card, 'part').map(function (x) { return { card: x.card, owner: x.card.id, target: card.id }; }) },
+    { label: '◇ 関連', type: 'rel', mark: '◇', items: relBoth }
+  ];
+
+  const cont = $('#m-rels');
+  cont.innerHTML = '';
+  let any = false;
+  groups.forEach(function (g) {
+    if (!g.items.length) return;
+    any = true;
+    const box = el('div', 'rel-group');
+    box.appendChild(el('div', 'rel-group-label', g.label));
+    g.items.forEach(function (it) {
+      box.appendChild(relItemNode(it.card, g.type, it.owner, it.target, g.mark));
+    });
+    cont.appendChild(box);
+  });
+  if (!any) {
+    cont.appendChild(el('div', 'rel-empty',
+      'まだつながりはありません。下の欄で相手のカード名を打つと候補が出ます。'));
+  }
+}
+
+function relSearchClear() {
+  const i = $('#m-rel-search');
+  if (i) i.value = '';
+  const b = $('#m-rel-results');
+  if (b) { b.innerHTML = ''; b.classList.add('hidden'); }
+}
+
+function relSearchRender() {
+  const card = currentCard();
+  const box = $('#m-rel-results');
+  if (!card || !box) return;
+  const q = ($('#m-rel-search').value || '').trim().toLowerCase();
+  if (!q) { box.innerHTML = ''; box.classList.add('hidden'); return; }
+
+  const dir = $('#m-rel-type').value;
+  const hits = STATE.cards.filter(function (c) {
+    return c.id !== card.id && !c.archived && !c.deleted && relSameBoard(c)
+      && String(c.title || '').toLowerCase().indexOf(q) >= 0;
+  }).slice(0, 40);
+
+  box.innerHTML = '';
+  box.classList.remove('hidden');
+  if (!hits.length) {
+    box.appendChild(el('div', 'rel-note', 'このボードに、その名前のカードは見つかりません。'));
+    return;
+  }
+  hits.forEach(function (h) {
+    const row = el('div', 'rel-hit');
+    row.appendChild(el('div', '', esc(h.title)));
+    row.appendChild(el('div', 'rel-where', esc(relListName(h.listId)) + (h.done ? '　✓ 完了' : '')));
+    row.addEventListener('click', function () {
+      const p = (dir === 'flowIn')
+        ? relAdd(h.id, card.id, 'flow')       // 相手 → このカード
+        : relAdd(card.id, h.id, dir);         // このカード → 相手
+      p.then(function (ok) {
+        relSearchClear();
+        const cur = currentCard();
+        if (cur) renderRels(cur);
+        if (ok) relRerender();
+      });
+    });
+    box.appendChild(row);
+  });
+}
+
+/* ---------------------- 盤面に線を重ねる ---------------------- */
+
+function updateRelBtn() {
+  const b = $('#relToggleBtn');
+  if (b) {
+    b.classList.toggle('on', relsVisible);
+    b.title = relsVisible ? 'つながりの線を消す' : 'カード同士のつながりを線で表示する';
+  }
+  document.body.classList.toggle('rel-on', relsVisible);
+}
+function relToggle() {
+  relsVisible = !relsVisible;
+  try { localStorage.setItem('relsVisible', relsVisible ? '1' : ''); } catch (e) {}
+  if (!relsVisible) relHoverId = null;
+  updateRelBtn();
+  relDraw();
+  setStatus(relsVisible ? 'つながりを線で表示中（カードに触れるとその線が濃くなります）' : '');
+}
+function relDrawSoon() {
+  if (!relsVisible || relDragging || relRaf) return;
+  relRaf = requestAnimationFrame(function () { relRaf = 0; relDraw(); });
+}
+
+// 2枚のカードの、いちばん自然な辺どうしを曲線で結ぶ
+function relAnchor(a, b) {
+  let x1, y1, x2, y2, c1x, c1y, c2x, c2y, d;
+  // 制御点の伸ばし幅。短すぎると線が潰れ、長すぎるとループして見えるので上下で挟む
+  const reach = function (gap) { return Math.min(Math.max(34, gap * 0.5), 150); };
+  if (b.l > a.r + 8) {                     // 相手が右にいる
+    x1 = a.r; y1 = a.cy; x2 = b.l; y2 = b.cy;
+    d = reach(x2 - x1);
+    c1x = x1 + d; c1y = y1; c2x = x2 - d; c2y = y2;
+  } else if (b.r < a.l - 8) {              // 相手が左にいる
+    x1 = a.l; y1 = a.cy; x2 = b.r; y2 = b.cy;
+    d = reach(x1 - x2);
+    c1x = x1 - d; c1y = y1; c2x = x2 + d; c2y = y2;
+  } else {                                 // 同じ列（上下に結ぶ）
+    const down = b.cy >= a.cy;
+    x1 = a.cx; y1 = down ? a.b : a.t;
+    x2 = b.cx; y2 = down ? b.t : b.b;
+    d = Math.min(Math.max(16, Math.abs(y2 - y1) * 0.4), 90);
+    c1x = x1; c1y = y1 + (down ? d : -d);
+    c2x = x2; c2y = y2 + (down ? -d : d);
+  }
+  const r1 = function (v) { return Math.round(v * 10) / 10; };
+  return 'M' + r1(x1) + ',' + r1(y1) + ' C' + r1(c1x) + ',' + r1(c1y)
+       + ' ' + r1(c2x) + ',' + r1(c2y) + ' ' + r1(x2) + ',' + r1(y2);
+}
+
+function relDragStart() {
+  relDragging = true;
+  const L = $('#relLayer');
+  if (L) L.innerHTML = '';
+}
+function relDragEnd() {
+  relDragging = false;
+  relDrawSoon();
+}
+
+function relDraw() {
+  const layer = $('#relLayer');
+  const board = $('#board');
+  if (!layer || !board) return;
+  document.querySelectorAll('.card.rel-hot').forEach(function (n) { n.classList.remove('rel-hot'); });
+  if (!relsVisible) { layer.innerHTML = ''; layer.classList.add('hidden'); return; }
+  layer.classList.remove('hidden');
+
+  const br = board.getBoundingClientRect();
+
+  // 画面に見えているカードの位置を集める（リストの中で隠れている分は描かない）
+  const pos = {};
+  Array.prototype.forEach.call(board.querySelectorAll('.card'), function (n) {
+    const id = n.dataset.cardId;
+    if (!id) return;
+    const r = n.getBoundingClientRect();
+    const sr = (n.parentElement || board).getBoundingClientRect();
+    const t = Math.max(r.top, sr.top, br.top);
+    const b = Math.min(r.bottom, sr.bottom, br.bottom);
+    const l = Math.max(r.left, br.left);
+    const rt = Math.min(r.right, br.right);
+    if (b - t < 8 || rt - l < 8) return;   // ほとんど見えていない
+    pos[id] = { l: r.left, r: r.right, t: t, b: b, cx: (r.left + r.right) / 2, cy: (t + b) / 2, el: n };
+  });
+
+  const edges = [];
+  STATE.cards.forEach(function (c) {
+    if (!pos[c.id] || !Array.isArray(c.rels)) return;
+    c.rels.forEach(function (r) {
+      if (!r || !r.to || !pos[r.to]) return;
+      edges.push({ from: c.id, to: r.to, type: relType(r.type) });
+    });
+  });
+
+  const hot = !!relHoverId && edges.some(function (e) {
+    return e.from === relHoverId || e.to === relHoverId;
+  });
+
+  const parts = [];
+  parts.push('<defs>');
+  REL_ORDER.forEach(function (t) {
+    parts.push('<marker id="relArrow-' + t + '" viewBox="0 0 10 10" refX="9" refY="5"'
+      + ' markerWidth="6" markerHeight="6" orient="auto">'
+      + '<path d="M0,0 L10,5 L0,10 z" fill="' + REL_TYPES[t].color + '"/></marker>');
+  });
+  parts.push('<clipPath id="relClip"><rect x="' + Math.round(br.left) + '" y="' + Math.round(br.top)
+    + '" width="' + Math.round(br.width) + '" height="' + Math.round(br.height) + '"/></clipPath>');
+  parts.push('</defs><g clip-path="url(#relClip)">');
+
+  edges.forEach(function (e) {
+    const T = REL_TYPES[e.type];
+    const on = !hot || e.from === relHoverId || e.to === relHoverId;
+    if (on && hot) {
+      pos[e.from].el.classList.add('rel-hot');
+      pos[e.to].el.classList.add('rel-hot');
+    }
+    const d = relAnchor(pos[e.from], pos[e.to]);
+    const w = (on && hot) ? 3 : 2;
+    // カードの上を横切っても読めるように、同じ形の太いフチを下に敷く
+    parts.push('<path d="' + d + '" stroke-width="' + (w + 3.5) + '"'
+      + ' class="rel-halo' + (on ? '' : ' rel-dim') + '" />');
+    parts.push('<path d="' + d + '"'
+      + ' stroke="' + T.color + '" stroke-width="' + w + '"'
+      + (T.dash ? ' stroke-dasharray="' + T.dash + '"' : '')
+      + (e.type === 'rel' ? '' : ' marker-end="url(#relArrow-' + e.type + ')"')
+      + (on ? '' : ' class="rel-dim"') + ' />');
+  });
+  parts.push('</g>');
+  layer.innerHTML = parts.join('');
+}
+
+/* ---------------------- つながりマップ（全体像） ---------------------- */
+
+const RELMAP_W = 194, RELMAP_H = 58, RELMAP_GX = 74, RELMAP_GY = 14, RELMAP_PAD = 26;
+let relmapFocus = null;
+
+function showRelMap(focusId) {
+  relmapFocus = focusId || null;
+  $('#relmap').classList.remove('hidden');
+  renderRelMap();
+}
+function hideRelMap() { $('#relmap').classList.add('hidden'); relmapFocus = null; }
+
+// 今のボードの中で、つながりを持つカードと線を集める
+function relMapData(focusId) {
+  buildRelIndex();
+  const inBoard = {};
+  STATE.cards.forEach(function (c) {
+    if (c.archived || c.deleted || !relSameBoard(c)) return;
+    inBoard[c.id] = c;
+  });
+  let edges = [];
+  Object.keys(inBoard).forEach(function (id) {
+    const rels = inBoard[id].rels;
+    if (!Array.isArray(rels)) return;
+    rels.forEach(function (r) {
+      if (!r || !r.to || !inBoard[r.to] || r.to === id) return;
+      edges.push({ from: id, to: r.to, type: relType(r.type) });
+    });
+  });
+  const used = {};
+  edges.forEach(function (e) { used[e.from] = true; used[e.to] = true; });
+  let ids = Object.keys(used);
+
+  // 1枚に注目しているときは、そこにつながっているかたまりだけに絞る
+  if (focusId && used[focusId]) {
+    const adj = {};
+    ids.forEach(function (id) { adj[id] = []; });
+    edges.forEach(function (e) { adj[e.from].push(e.to); adj[e.to].push(e.from); });
+    const seen = {};
+    const stack = [focusId];
+    while (stack.length) {
+      const id = stack.pop();
+      if (seen[id]) continue;
+      seen[id] = true;
+      (adj[id] || []).forEach(function (n) { if (!seen[n]) stack.push(n); });
+    }
+    ids = ids.filter(function (id) { return seen[id]; });
+  }
+  const keep = {};
+  ids.forEach(function (id) { keep[id] = true; });
+  edges = edges.filter(function (e) { return keep[e.from] && keep[e.to]; });
+  return { ids: ids, cards: inBoard, edges: edges };
+}
+
+// 左から何列目に置くか＝前提をいくつ通ってきたか（一番長い道のり）
+function relMapDepth(ids, edges) {
+  const depth = {};
+  ids.forEach(function (id) { depth[id] = 0; });
+  const seq = edges.filter(function (e) { return e.type !== 'rel'; });
+  for (let k = 0; k < ids.length; k++) {
+    let changed = false;
+    seq.forEach(function (e) {
+      if (depth[e.to] < depth[e.from] + 1) { depth[e.to] = depth[e.from] + 1; changed = true; }
+    });
+    if (!changed) break;
+  }
+  return depth;
+}
+
+// 一番長い「流れ」の連なり＝ここが遅れると全部遅れる道すじ
+function relMapCritical(ids, edges, depth) {
+  const preds = {};
+  ids.forEach(function (id) { preds[id] = []; });
+  edges.forEach(function (e) { if (e.type === 'flow' && preds[e.to]) preds[e.to].push(e.from); });
+  const order = ids.slice().sort(function (a, b) { return depth[a] - depth[b]; });
+  const len = {}, prev = {};
+  order.forEach(function (id) {
+    len[id] = 1; prev[id] = null;
+    preds[id].forEach(function (p) {
+      if ((len[p] || 1) + 1 > len[id]) { len[id] = (len[p] || 1) + 1; prev[id] = p; }
+    });
+  });
+  let end = null;
+  order.forEach(function (id) { if (!end || len[id] > len[end]) end = id; });
+  const path = {};
+  if (end && len[end] >= 2) {
+    let cur = end;
+    while (cur) { path[cur] = true; cur = prev[cur]; }
+  }
+  return path;
+}
+
+function relMapLines(title) {
+  const s = String(title || '');
+  const per = 13;
+  if (s.length <= per) return [s];
+  if (s.length <= per * 2) return [s.slice(0, per), s.slice(per)];
+  return [s.slice(0, per), s.slice(per, per * 2 - 1) + '…'];
+}
+
+function renderRelMap() {
+  const body = $('#relmapBody');
+  if (!body) return;
+  const data = relMapData(relmapFocus);
+  if (!data.ids.length) {
+    body.innerHTML = '<div class="rel-note">このボードには、まだつながりがありません。'
+      + 'カードを開いて「🔗 つながり」の欄から相手のカードを選ぶと、ここに流れが出ます。</div>';
+    return;
+  }
+
+  const depth = relMapDepth(data.ids, data.edges);
+  const showCrit = $('#relmapCrit') ? $('#relmapCrit').checked : true;
+  const crit = showCrit ? relMapCritical(data.ids, data.edges, depth) : {};
+
+  // 列ごとに縦に並べる（同じ列の中はリストの並び順→カードの並び順）
+  const cols = {};
+  data.ids.forEach(function (id) { (cols[depth[id]] = cols[depth[id]] || []).push(id); });
+  const listPos = {};
+  STATE.lists.forEach(function (l) { listPos[l.id] = Number(l.position) || 0; });
+  const xy = {};
+  let maxRows = 0;
+  const colKeys = Object.keys(cols).map(Number).sort(function (a, b) { return a - b; });
+  colKeys.forEach(function (d, ci) {
+    cols[d].sort(function (a, b) {
+      const ca = data.cards[a], cb = data.cards[b];
+      const la = listPos[ca.listId] || 0, lb = listPos[cb.listId] || 0;
+      if (la !== lb) return la - lb;
+      return (Number(ca.position) || 0) - (Number(cb.position) || 0);
+    });
+    cols[d].forEach(function (id, i) {
+      xy[id] = {
+        x: RELMAP_PAD + ci * (RELMAP_W + RELMAP_GX),
+        y: RELMAP_PAD + i * (RELMAP_H + RELMAP_GY)
+      };
+    });
+    maxRows = Math.max(maxRows, cols[d].length);
+  });
+
+  const width = RELMAP_PAD * 2 + colKeys.length * RELMAP_W + Math.max(0, colKeys.length - 1) * RELMAP_GX;
+  const height = RELMAP_PAD * 2 + maxRows * RELMAP_H + Math.max(0, maxRows - 1) * RELMAP_GY;
+
+  const p = [];
+  p.push('<svg width="' + width + '" height="' + height + '" viewBox="0 0 ' + width + ' ' + height + '">');
+  p.push('<defs>');
+  REL_ORDER.forEach(function (t) {
+    p.push('<marker id="mapArrow-' + t + '" viewBox="0 0 10 10" refX="9" refY="5"'
+      + ' markerWidth="6" markerHeight="6" orient="auto">'
+      + '<path d="M0,0 L10,5 L0,10 z" fill="' + REL_TYPES[t].color + '"/></marker>');
+  });
+  p.push('<marker id="mapArrow-crit" viewBox="0 0 10 10" refX="9" refY="5"'
+    + ' markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#ff8b00"/></marker>');
+  p.push('</defs>');
+
+  // 線を先に描いて、カードの箱を上に載せる
+  data.edges.forEach(function (e) {
+    const a = xy[e.from], b = xy[e.to];
+    if (!a || !b) return;
+    const T = REL_TYPES[e.type];
+    const onCrit = e.type === 'flow' && crit[e.from] && crit[e.to] && depth[e.to] > depth[e.from];
+    let d;
+    if (b.x > a.x) {
+      const x1 = a.x + RELMAP_W, y1 = a.y + RELMAP_H / 2, x2 = b.x, y2 = b.y + RELMAP_H / 2;
+      const dx = Math.max(28, (x2 - x1) * 0.5);
+      d = 'M' + x1 + ',' + y1 + ' C' + (x1 + dx) + ',' + y1 + ' ' + (x2 - dx) + ',' + y2 + ' ' + x2 + ',' + y2;
+    } else if (b.x < a.x) {
+      const x1 = a.x, y1 = a.y + RELMAP_H / 2, x2 = b.x + RELMAP_W, y2 = b.y + RELMAP_H / 2;
+      const dx = Math.max(28, (x1 - x2) * 0.5);
+      d = 'M' + x1 + ',' + y1 + ' C' + (x1 - dx) + ',' + y1 + ' ' + (x2 + dx) + ',' + y2 + ' ' + x2 + ',' + y2;
+    } else {
+      const down = b.y >= a.y;
+      const x1 = a.x + RELMAP_W / 2, y1 = down ? a.y + RELMAP_H : a.y;
+      const x2 = b.x + RELMAP_W / 2, y2 = down ? b.y : b.y + RELMAP_H;
+      const dy = Math.max(20, Math.abs(y2 - y1) * 0.5);
+      d = 'M' + x1 + ',' + y1 + ' C' + x1 + ',' + (y1 + (down ? dy : -dy))
+        + ' ' + x2 + ',' + (y2 + (down ? -dy : dy)) + ' ' + x2 + ',' + y2;
+    }
+    p.push('<path d="' + d + '" stroke="' + (onCrit ? '#ff8b00' : T.color) + '"'
+      + ' stroke-width="' + (onCrit ? 3.5 : 2) + '"'
+      + (T.dash ? ' stroke-dasharray="' + T.dash + '"' : '')
+      + (e.type === 'rel' ? '' : ' marker-end="url(#mapArrow-' + (onCrit ? 'crit' : e.type) + ')"')
+      + (onCrit ? ' class="crit"' : '') + ' />');
+  });
+
+  data.ids.forEach(function (id) {
+    const c = data.cards[id], a = xy[id];
+    const st = relStatus(c);
+    const cls = ['relmap-node'];
+    if (c.done) cls.push('done');
+    else if (st) cls.push(st);
+    if (crit[id]) cls.push('crit');
+    if (relmapFocus === id) cls.push('focus');
+    p.push('<g class="' + cls.join(' ') + '" data-id="' + id + '">');
+    p.push('<rect x="' + a.x + '" y="' + a.y + '" width="' + RELMAP_W + '" height="' + RELMAP_H + '" rx="8"/>');
+    const lines = relMapLines(c.title);
+    const mark = c.done ? '✓ ' : (st === 'blocked' ? '⛔ ' : (st === 'ready' ? '🚀 ' : ''));
+    lines.forEach(function (ln, i) {
+      p.push('<text x="' + (a.x + 10) + '" y="' + (a.y + 19 + i * 15) + '">'
+        + esc(i === 0 ? mark + ln : ln) + '</text>');
+    });
+    p.push('<text class="relmap-sub" x="' + (a.x + 10) + '" y="' + (a.y + RELMAP_H - 9) + '">'
+      + esc(relMapLines(relListName(c.listId))[0]) + '</text>');
+    p.push('</g>');
+  });
+  p.push('</svg>');
+  body.innerHTML = p.join('');
+
+  body.querySelectorAll('.relmap-node').forEach(function (n) {
+    n.addEventListener('click', function () {
+      hideRelMap();
+      openModal(n.dataset.id);
+    });
+  });
 }
 
 function renderList(list) {
@@ -974,6 +1605,14 @@ function renderCard(card) {
     });
   }
   if (card.template) badges.appendChild(el('span', 'badge', '📋 テンプレ'));
+  // つながり：前工程が残っているか、今すぐ動けるか
+  const relSt = relStatus(card);
+  if (relSt === 'blocked') badges.appendChild(el('span', 'badge rel-blocked', '⛔ 待ち'));
+  else if (relSt === 'ready') badges.appendChild(el('span', 'badge rel-ready', '🚀 着手可'));
+  const relNext = relOut(card, 'flow').length;
+  if (relNext) badges.appendChild(el('span', 'badge', '⇢ ' + relNext));
+  const relPart = relOut(card, 'part').length;
+  if (relPart) badges.appendChild(el('span', 'badge', '▸ ' + relPart));
   if (Array.isArray(card.links) && card.links.length) {
     const hasYt = card.links.some(function (u) { return youtubeId(u); });
     badges.appendChild(el('span', 'badge', (hasYt ? '▶ ' : '🔗 ') + card.links.length));
@@ -1004,6 +1643,17 @@ function toggleDone(card) {
   });
   refreshCardNode(card);
   if (openCardId === card.id) updateModalDoneBtn(card);
+  // つながっているカードの「⛔待ち / 🚀着手可」も変わるので盤面を描き直す
+  if (relOut(card, 'flow').length || relIn(card, 'flow').length) {
+    relRerender();
+    // 完了にしたことで動けるようになったカードを教える
+    if (card.done) {
+      const freed = relOut(card, 'flow')
+        .filter(function (x) { return relStatus(x.card) === 'ready'; })
+        .map(function (x) { return '「' + x.card.title + '」'; });
+      if (freed.length) setStatus('🚀 次に動けます：' + freed.join('、'));
+    }
+  }
 }
 
 /* --------------------------- アーカイブ --------------------------- */
@@ -1350,7 +2000,9 @@ function enableSorting() {
       group: 'cards', animation: 150, ghostClass: 'sortable-ghost',
       // スマホ: 長押し(180ms)してから動かすと移動。普通のスワイプはスクロール
       delay: 180, delayOnTouchOnly: true, touchStartThreshold: 6,
+      onStart: relDragStart,
       onEnd: function (evt) {
+        relDragEnd();
         const cardId = evt.item.dataset.cardId;
         const toListId = evt.to.dataset.listId;
         const orderedIds = Array.from(evt.to.children).map(function (n) { return n.dataset.cardId; });
@@ -1374,7 +2026,9 @@ function enableSorting() {
   SORTABLES.push(new Sortable($('#board'), {
     animation: 150, draggable: '.list', handle: '.list-header',
     delay: 180, delayOnTouchOnly: true, touchStartThreshold: 6,
+    onStart: relDragStart,
     onEnd: function () {
+      relDragEnd();
       const ids = Array.from(document.querySelectorAll('.list')).map(function (n) { return n.dataset.listId; });
       ids.forEach(function (id, idx) {
         const l = STATE.lists.find(function (x) { return x.id === id; });
@@ -1394,6 +2048,7 @@ function openModal(cardId) {
   $('#m-move-panel').classList.add('hidden');
   resetDescPreview();      // 前のカードのプレビュー表示を持ち越さない
   hideDistPanel();         // 展開パネルも畳んでおく
+  relSearchClear();        // 前のカードの検索結果を持ち越さない
   renderModal();
   $('#modal').classList.remove('hidden');
   autoGrow($('#m-desc')); // 表示後に高さを中身へ合わせる
@@ -1492,6 +2147,7 @@ function renderModal() {
   renderPlaces(card);
   renderChecklist(card);
   renderComments(card);
+  renderRels(card);
 }
 
 /* ----------------------- ラベルの追加（色選択つき） ----------------------- */
@@ -3734,6 +4390,41 @@ function bindUI() {
   $('#homeBtn').addEventListener('click', showHome);
   $('#boardBar').addEventListener('click', showHome);   // 名前をクリックしても切り替えられる
   $('#widthResetBtn').addEventListener('click', resetListWidths);
+
+  // ── カード同士のつながり ──
+  try { relsVisible = localStorage.getItem('relsVisible') === '1'; } catch (e) { relsVisible = false; }
+  updateRelBtn();
+  $('#relToggleBtn').addEventListener('click', relToggle);
+  $('#relMapBtn').addEventListener('click', function () { showRelMap(null); });
+  $('#relmapClose').addEventListener('click', hideRelMap);
+  $('#relmapCrit').addEventListener('change', renderRelMap);
+  $('#relmap').addEventListener('click', function (e) {
+    if (e.target.id === 'relmap') hideRelMap();
+  });
+  $('#m-rel-map').addEventListener('click', function () {
+    const c = currentCard();
+    if (c) { closeModal(); showRelMap(c.id); }
+  });
+  $('#m-rel-search').addEventListener('input', relSearchRender);
+  $('#m-rel-type').addEventListener('change', relSearchRender);
+  // 盤面がスクロール・変形したら線を引き直す（リスト内の縦スクロールも捕まえる）
+  window.addEventListener('scroll', relDrawSoon, true);
+  // 別タブに行っている間は requestAnimationFrame が止まる。戻ってきたら引き直す
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) return;
+    if (relRaf) { cancelAnimationFrame(relRaf); relRaf = 0; }
+    relDrawSoon();
+  });
+  window.addEventListener('resize', relDrawSoon);
+  $('#board').addEventListener('mouseover', function (e) {
+    if (!relsVisible) return;
+    const n = e.target.closest ? e.target.closest('.card') : null;
+    const id = n ? n.dataset.cardId : null;
+    if (id !== relHoverId) { relHoverId = id; relDrawSoon(); }
+  });
+  $('#board').addEventListener('mouseleave', function () {
+    if (relHoverId) { relHoverId = null; relDrawSoon(); }
+  });
   $('#boardHome').addEventListener('click', function (e) {
     if (e.target.id === 'boardHome') hideHome(); // 背景クリックで閉じる
   });

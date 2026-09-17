@@ -150,7 +150,7 @@ DBは「My Trello DB」というスプレッドシート（初回アクセス時
 |---|---|
 | **Boards** | id, title, position, archived, createdAt, background, shareToken |
 | **Lists** | id, title, position, archived, boardId, wip, collapsed |
-| **Cards** | id, listId, title, desc, position, labels, due, checklist, comments, createdAt, updatedAt, archived, attachments, start, allDay, done, ratings, fields, cover, template, links, sync, places, deleted, klass, period, embedding, embHash |
+| **Cards** | id, listId, title, desc, position, labels, due, checklist, comments, createdAt, updatedAt, archived, attachments, start, allDay, done, ratings, fields, cover, template, links, sync, places, deleted, klass, period, embedding, embHash, rels |
 | **Labels** | id, name, color, boardId |
 | **Fields** | id, boardId, name, type, config, position, showFront |
 | **Views** | id, name, config, position |
@@ -158,7 +158,7 @@ DBは「My Trello DB」というスプレッドシート（初回アクセス時
 | **Recurring** | id, boardId, listId, title, freq, lastRun, position |
 | **History** | id, cardId, at, field, before, after |
 
-JSON文字列で保存する列：Cards.labels(配列), checklist(配列), comments(配列), attachments(配列), ratings(旧・未使用), fields({fieldId:値}), cover({type,value/fileId}|null), links(URL配列), sync({gcal,gtask}), places(地名の文字列配列) / Fields.config / Views.config / Automations.actions。
+JSON文字列で保存する列：Cards.labels(配列), checklist(配列), comments(配列), attachments(配列), ratings(旧・未使用), fields({fieldId:値}), cover({type,value/fileId}|null), links(URL配列), sync({gcal,gtask}), places(地名の文字列配列), rels(つながり) / Fields.config / Views.config / Automations.actions。
 boolean列：archived, allDay, done, template, showFront, collapsed, deleted。
 
 > **`archived` と `deleted` は別物**。`archived`＝ユーザーが片付けたカード（アーカイブ画面から戻せる）。
@@ -168,6 +168,18 @@ boolean列：archived, allDay, done, template, showFront, collapsed, deleted。
 > 行を本当に消すのは `purgeCard` / `emptyTrash` だけで、添付をDriveのゴミ箱へ送るのもそこだけ。
 
 > **ratings列は旧「評価軸」の名残で現在未使用**（fieldsに統合済み）。Ratingsシートも旧版の名残で残ることがあるが未使用。
+
+> **`rels` = カード同士のつながり（v20で追加）**。形は `[{to:'<相手のcardId>', type:'flow'|'part'|'rel'}, ...]`。
+> **向きは常に「このカード → to」の一方向**で、相手側には何も書かない（両側に書くと片方だけ消えたときに矛盾する）。
+> 逆向き（自分に入ってくる線）はクライアントが `buildRelIndex()` で毎回作り直す索引 `REL_IN` から引く。
+> - `flow` … このカードが終わってから相手に取りかかる。**ここから ⛔待ち / 🚀着手可 を計算している**
+> - `part` … 相手はこのカードの一部（親 → 子）
+> - `rel`  … ただの関連。順番の意味なし。線は破線で矢印なし
+>
+> 相手のカードを消しても**掃除は不要**。`relLive()` が archived / deleted の相手を「無いもの」として弾く。
+> 別シートにせず列にしたのは、**バックアップ（シート丸ごと複製）とエクスポート（getAllCards）にそのまま乗る**ため。
+> `copyBoard` はカードIDの対応表を先に作って `rels` を新IDへ張り替える。`copyCard` / `distributeLesson` は
+> つながりを引き継がない（同じ相手に線が二重にぶら下がるため）。
 
 ---
 
@@ -208,6 +220,12 @@ boolean列：archived, allDay, done, template, showFront, collapsed, deleted。
 - **共有ターゲット**（アプリ版のみ）: スマホの「共有」メニューから My Trello を選ぶとカードになる
 - **リストの折りたたみ**（`Lists.collapsed`）: 個別／一括。畳んだリストは件数だけ縦表示
 - **復帰のしやすさ**: 再読み込みしてもスクロール位置と開いていたカードを復元（スマホでSafariに落とされても続きから）
+- **リストの幅を変える**（`localStorage.listWidths`）: リスト右端のつまみをドラッグ。ダブルクリックで1本だけ標準に戻す／上部バー「↔ 幅を戻す」で全部戻す。端末ごとの表示設定なのでDBには保存しない
+- **カード同士のつながり**（`Cards.rels`・v20）: カードを向き付きで結ぶ。**線を引くだけで終わらせない**のが要点
+  - カード詳細の「🔗 つながり」欄で相手を検索してつなぐ／外す。輪（A→B→A）になる向きは拒否する
+  - 上部バー「🔗 つながり」で**盤面に線を重ねる**（ONの間だけリスト間隔を56pxに広げて線の通り道を作る）。カードに触れるとその線だけ濃くなる
+  - カードに **⛔待ち**（前工程が未完了）／**🚀着手可**（前工程が全部完了）／**⇢n・▸n** のバッジ。完了にした瞬間に「次に動けます：〜」と出る
+  - 上部バー「🗺 マップ」で**全体像**。前提の深さで左→右に自動整列し、一番長い流れ（クリティカルパス）を橙で色づけ
 
 UIは画面下部の各 `#overlay`（boardHome, calendar, table, dashboard, timeline, filter, archive, settings, importer, ai, modal）で構成。設定系（リマインダー/自動化/繰り返し/共有/背景/バックアップ）は **⚙設定オーバーレイ(`#settings`)** に集約。
 
@@ -431,6 +449,31 @@ call('updateCard', [cardId, {'fields': {...}}])
     - **行ごとずれた行の見分け方**: `labels/checklist/links/places` が配列か、`fields/cover/sync` がオブジェクトか、
       `done/template/deleted` が真偽値か、を「見出し順」と「SCHEMA順」の2通りで採点し、高い方が正しい並び。
     - **教訓**: **スプレッドシートを手で開いて列を挿入しない。** 列の増減は必ず `ensureSchema_` 経由で行う（§4）。
+
+---
+
+## 12.0 v3.16（2026-09-17）カード同士のつながり
+`SCHEMA_VERSION = '20'`。`Cards.rels` を追加。クライアントは `JavaScript.html` の
+「カード同士のつながり（リレーション）」ブロックに集約（`renderList` の直前）。
+
+**実装で引っかかった所（同じ所で悩まないように）**
+- **線が潰れて見えない**: 標準の盤面はリスト間12px・カード間8pxしか隙間がなく、
+  隣同士のリストを結ぶ線は「ほぼ真上真下の細い波線」になって読めなかった。
+  → `body.rel-on` の間だけ `#board{gap:56px}` / `.card{margin-bottom:22px}` にして通り道を作った。
+- **線の層の重ね順**: `#relLayer` は `position:fixed; inset:0;` の `<svg>`（z-index:6, `pointer-events:none`）。
+  座標は `getBoundingClientRect()` の画面座標をそのまま使う（viewBoxを付けない）。
+  はみ出しは `<clipPath>` で盤面の矩形に切る。
+- **リストの中で隠れているカード**: `.cards` は縦スクロールするので、カードの矩形を
+  スクローラの矩形と交差させて、見えている高さが8px未満なら線を描かない。
+  また `.card` の `content-visibility:auto` は画面外の高さを推定値で返すので、
+  線を出している間だけ `content-visibility:visible` にしている。
+- **裏に回ると線が固まる**: 再描画は `requestAnimationFrame` で間引いているが、
+  タブが隠れるとrAFが止まり `relRaf` が立ったままになる。`visibilitychange` で
+  `cancelAnimationFrame` して引き直す。
+- **ドラッグ中**: Sortable の `onStart/onEnd` で `relDragging` を立て、その間は線を消す
+  （古い位置に線が残ると壊れて見えるため）。
+- **輪の検出**: `relWouldLoop()` が `to` 側から `rel` 以外の線をたどって `from` に戻れるか見る。
+  戻れたら拒否（「待ち」が永久に解けなくなるため）。
 
 ---
 

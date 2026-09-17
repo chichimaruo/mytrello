@@ -23,6 +23,8 @@
     <button id="addListBtn" class="ghost-btn">＋ リスト追加</button>
     <button id="collapseAllBtn" class="ghost-btn" title="全リストを折りたたむ/展開">⊟ 全部畳む</button>
     <button id="widthResetBtn" class="ghost-btn hidden" title="広げたリストの幅を標準（280px）に戻す">↔ 幅を戻す</button>
+    <button id="relToggleBtn" class="ghost-btn" title="カード同士のつながりを線で表示する">🔗 つながり</button>
+    <button id="relMapBtn" class="ghost-btn" title="つながりを地図（全体像）で見る">🗺 マップ</button>
     <span id="status"></span>
   </header>
 
@@ -39,6 +41,9 @@
   </div>
 
   <main id="board"></main>
+
+  <!-- カード同士のつながりを描く層（盤面の上に重ねる。クリックは透過する） -->
+  <svg id="relLayer" class="rel-layer hidden" aria-hidden="true"></svg>
 
   <!-- ボード一覧 -->
   <div id="boardHome" class="overlay hidden">
@@ -357,6 +362,23 @@
     </div>
   </div>
 
+  <!-- つながりマップ（全体像） -->
+  <div id="relmap" class="overlay hidden">
+    <div class="overlay-inner relmap-inner">
+      <div class="cal-header">
+        <h2 class="overlay-title">🗺 つながりマップ</h2>
+        <label class="relmap-opt"><input type="checkbox" id="relmapCrit" checked /> 一番長い流れを色づけ</label>
+        <button id="relmapClose" class="ghost-btn small dark cal-close">閉じる</button>
+      </div>
+      <p class="set-note">
+        左から右へ、仕事の流れの順に並べています。カードをクリックすると開きます。
+        <b class="rel-legend blocked">⛔ 待ち</b>＝前のカードがまだ終わっていない。
+        <b class="rel-legend ready">🚀 着手可</b>＝前が全部終わったので今すぐ動ける。
+      </p>
+      <div id="relmapBody" class="relmap-body"></div>
+    </div>
+  </div>
+
   <!-- 集計ダッシュボード -->
   <div id="dashboard" class="overlay hidden">
     <div class="overlay-inner">
@@ -519,6 +541,23 @@
             </div>
             <label class="allday"><input id="m-allday" type="checkbox" /> 終日</label>
             <button id="m-date-clear" class="ghost-btn small dark">日付をクリア</button>
+          </div>
+
+          <div class="m-section">
+            <label class="m-label">🔗 つながり</label>
+            <div id="m-rel-status"></div>
+            <div id="m-rels"></div>
+            <div class="rel-add-row">
+              <select id="m-rel-type">
+                <option value="flow">⇢ このカードの次（流れ）</option>
+                <option value="flowIn">⇠ このカードの前（流れ）</option>
+                <option value="part">▸ このカードの内訳</option>
+                <option value="rel">◇ ただの関連</option>
+              </select>
+              <input id="m-rel-search" placeholder="つなげる相手のカード名で検索" autocomplete="off" />
+            </div>
+            <div id="m-rel-results" class="rel-results hidden"></div>
+            <button id="m-rel-map" class="ghost-btn small dark">🗺 このカードのつながりを地図で見る</button>
           </div>
 
           <div class="m-section">
