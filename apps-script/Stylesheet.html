@@ -564,6 +564,32 @@
   .rel-hit .rel-where { font-size: 11px; color: #5e6c84; }
   .rel-note { font-size: 12px; color: #5e6c84; padding: 8px 9px; }
 
+  /* つなぐモード */
+  .rel-linkbar {
+    position: fixed; z-index: 40; left: 50%; transform: translateX(-50%);
+    bottom: calc(16px + env(safe-area-inset-bottom));
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: center;
+    max-width: calc(100vw - 24px);
+    background: #172b4d; color: #fff; border-radius: 10px;
+    padding: 9px 14px; box-shadow: 0 6px 24px rgba(9,30,66,.4); font-size: 13px;
+  }
+  .rel-linkbar-icon { font-size: 15px; }
+  .rel-linkbar select { font-size: 13px; padding: 3px 5px; border-radius: 6px; border: 0; }
+  .rel-linkbar-msg { max-width: 46vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rel-linkbar-hint { color: #b6c2d9; }
+  .rel-linkbar .ghost-btn { background: rgba(255,255,255,.16); color: #fff; }
+  .rel-linkbar .ghost-btn:hover { background: rgba(255,255,255,.28); }
+  /* つなぐモード中は、カードが「選ぶ対象」だと分かるようにする */
+  body.rel-linking .card { cursor: crosshair; }
+  /* モード中はカードのどこを押しても「つなぐ」になるよう、中の小さなボタンを止める */
+  body.rel-linking .card-edit-btn { display: none !important; }
+  body.rel-linking .card-check { pointer-events: none; }
+  body.rel-linking .card:hover { outline: 2px dashed #0079bf; outline-offset: -1px; }
+  .card.rel-origin, body.rel-linking .card.rel-origin:hover {
+    outline: 3px solid #0079bf; outline-offset: -1px;
+    box-shadow: 0 0 0 4px rgba(0,121,191,.22);
+  }
+
   /* つながりマップ */
   .relmap-inner { max-width: 1180px; }
   .relmap-opt { font-size: 12px; color: #5e6c84; display: flex; align-items: center; gap: 4px; white-space: nowrap; }

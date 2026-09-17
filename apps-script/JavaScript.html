@@ -1457,6 +1457,109 @@ function renderRelMap() {
   });
 }
 
+/* ---------------------- つなぐモード（カードを順にクリック） ----------------------
+   カード詳細を開いて検索するより速い道。上部バーの「✚ つなぐ」か、
+   カードの Ctrl(⌘)+クリックで始まる。あとは相手をクリックするだけ。
+   flow は「つないだ先が次の起点」になるので A→B→C と鎖で引ける。
+   part / rel は起点を固定したままなので、1枚に何枚でもぶら下げられる。 */
+
+let relLinkOn = false;
+let relLinkFrom = null;
+let relLinkType = 'flow';
+let relLinkWasVisible = false;
+
+function relLinkApply() {
+  document.body.classList.toggle('rel-linking', relLinkOn);
+  document.querySelectorAll('.card.rel-origin').forEach(function (n) { n.classList.remove('rel-origin'); });
+  if (relLinkOn && relLinkFrom) {
+    const n = cardNode(relLinkFrom);
+    if (n) n.classList.add('rel-origin');
+  }
+  const b = $('#relLinkBtn');
+  if (b) b.classList.toggle('on', relLinkOn);
+  renderRelLinkBar();
+}
+
+function renderRelLinkBar() {
+  const bar = $('#relLinkBar');
+  if (!bar) return;
+  bar.classList.toggle('hidden', !relLinkOn);
+  if (!relLinkOn) return;
+  const sel = $('#relLinkType');
+  if (sel) sel.value = relLinkType;
+  const msg = $('#relLinkMsg');
+  const from = relLinkFrom ? relLive(relLinkFrom) : null;
+  if (!from) {
+    msg.innerHTML = '<b>つなぐ元</b>のカードをクリックしてください';
+  } else {
+    msg.innerHTML = '<b>' + esc(from.title) + '</b> ' + REL_TYPES[relLinkType].mark
+      + ' <span class="rel-linkbar-hint">'
+      + (relLinkType === 'flow' ? '相手をクリック（続けて鎖のようにつなげます）'
+                                : '相手をクリック（この1枚に何枚でも足せます）')
+      + '</span>';
+  }
+}
+
+function relLinkStart(fromId) {
+  if (!relLinkOn) {
+    relLinkOn = true;
+    // つないだ結果がその場で見えるように、線の表示を自動で入れる
+    relLinkWasVisible = relsVisible;
+    if (!relsVisible) { relsVisible = true; updateRelBtn(); }
+  }
+  relLinkFrom = fromId || null;
+  relRerender();
+  relLinkApply();
+  setStatus(fromId ? '' : 'つなぐ元のカードをクリックしてください');
+}
+
+function relLinkStop() {
+  if (!relLinkOn) return;
+  relLinkOn = false;
+  relLinkFrom = null;
+  if (!relLinkWasVisible && relsVisible) { relsVisible = false; updateRelBtn(); }
+  relRerender();
+  relLinkApply();
+  setStatus('つなぐモードを終わりました');
+}
+
+function relLinkToggle() {
+  if (relLinkOn) relLinkStop(); else relLinkStart(null);
+}
+
+function relLinkPick(card) {
+  const fromId = relLinkFrom;
+  const type = relLinkType;
+  if (!fromId || fromId === card.id) return;
+  relAdd(fromId, card.id, type).then(function (ok) {
+    if (!ok) { relLinkApply(); return; }
+    // 押し間違えても Ctrl+Z / バーの「直前を取り消す」で戻せる
+    pushUndo('つながりを追加', function () { return relRemove(fromId, card.id, type); });
+    // 流れは鎖で引けるように起点を進める。内訳・関連は起点を動かさない
+    if (type === 'flow') relLinkFrom = card.id;
+    relRerender();
+    relLinkApply();
+    if (openCardId) { const cur = currentCard(); if (cur) renderRels(cur); }
+  });
+}
+
+// カードのクリックを、つなぐモードが先に受け取る。true を返したらカードは開かない
+function relLinkClick(card, e) {
+  if (e && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    relLinkStart(card.id);       // モード外なら開始、モード中なら起点を差し替え
+    return true;
+  }
+  if (!relLinkOn) return false;
+  if (!relLinkFrom || relLinkFrom === card.id) {
+    relLinkFrom = (relLinkFrom === card.id) ? null : card.id;
+    relLinkApply();
+    return true;
+  }
+  relLinkPick(card);
+  return true;
+}
+
 function renderList(list) {
   // 折りたたみ表示（縦書きタイトル＋枚数）
   if (list.collapsed) {
@@ -1597,7 +1700,11 @@ function renderCard(card) {
   editBtn.addEventListener('click', function (e) { e.stopPropagation(); openQuickEdit(card, c); });
   c.appendChild(editBtn);
 
-  c.addEventListener('click', function () { openModal(card.id); });
+  if (relLinkOn && relLinkFrom === card.id) c.classList.add('rel-origin');
+  c.addEventListener('click', function (e) {
+    if (relLinkClick(card, e)) return;   // つなぐモード中はカードを開かない
+    openModal(card.id);
+  });
   return c;
 }
 
@@ -3126,6 +3233,7 @@ function showShortcutHelp() {
     + '  d：期限を編集\n'
     + '  l：ラベルを編集\n'
     + '  1〜9：ラベルの付け外し\n\n'
+    + '  Ctrl(⌘)+クリック：ここを起点に「つなぐモード」を始める\n\n'
     + '■ リストにマウスを乗せて：\n'
     + '  [：リストの折りたたみ/展開\n\n'
     + '■ 全体：\n'
@@ -4365,6 +4473,13 @@ function bindUI() {
   updateRelBtn();
   $('#relToggleBtn').addEventListener('click', relToggle);
   $('#relMapBtn').addEventListener('click', function () { showRelMap(null); });
+  $('#relLinkBtn').addEventListener('click', relLinkToggle);
+  $('#relLinkDone').addEventListener('click', relLinkStop);
+  $('#relLinkUndo').addEventListener('click', doUndo);
+  $('#relLinkType').addEventListener('change', function () {
+    relLinkType = relType(this.value);
+    renderRelLinkBar();
+  });
   $('#relmapClose').addEventListener('click', hideRelMap);
   $('#relmapCrit').addEventListener('change', renderRelMap);
   $('#relmap').addEventListener('click', function (e) {
@@ -4850,7 +4965,9 @@ function bindUI() {
     else if (!$('#importer').classList.contains('hidden')) hideImporter();
     else if (!$('#settings').classList.contains('hidden')) hideSettings();
     else if (!$('#calendar').classList.contains('hidden')) hideCalendar();
+    else if (!$('#relmap').classList.contains('hidden')) hideRelMap();
     else if (!$('#boardHome').classList.contains('hidden')) hideHome();
+    else if (relLinkOn) relLinkStop();
   });
 
   // ホバー中のカードを追跡（Trello風ショートカットの対象）

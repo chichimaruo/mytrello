@@ -36,6 +36,7 @@
     <button id="collapseAllBtn" class="ghost-btn" title="全リストを折りたたむ/展開">⊟ 全部畳む</button>
     <button id="widthResetBtn" class="ghost-btn hidden" title="広げたリストの幅を標準（280px）に戻す">↔ 幅を戻す</button>
     <button id="relToggleBtn" class="ghost-btn" title="カード同士のつながりを線で表示する">🔗 つながり</button>
+    <button id="relLinkBtn" class="ghost-btn" title="カードを順にクリックしてつなげる（カードを Ctrl+クリックでも始まります）">✚ つなぐ</button>
     <button id="relMapBtn" class="ghost-btn" title="つながりを地図（全体像）で見る">🗺 マップ</button>
     <span id="status"></span>
   </header>
@@ -56,6 +57,19 @@
 
   <!-- カード同士のつながりを描く層（盤面の上に重ねる。クリックは透過する） -->
   <svg id="relLayer" class="rel-layer hidden" aria-hidden="true"></svg>
+
+  <!-- つなぐモードの操作バー（画面下に出る） -->
+  <div id="relLinkBar" class="rel-linkbar hidden">
+    <span class="rel-linkbar-icon">🔗</span>
+    <select id="relLinkType" title="つながりの種類">
+      <option value="flow">⇢ 流れ（次につながる）</option>
+      <option value="part">▸ 内訳にする</option>
+      <option value="rel">◇ ただの関連</option>
+    </select>
+    <span id="relLinkMsg" class="rel-linkbar-msg"></span>
+    <button id="relLinkUndo" class="ghost-btn small">↩ 直前を取り消す</button>
+    <button id="relLinkDone" class="ghost-btn small">終わり（Esc）</button>
+  </div>
 
   <!-- ボード一覧 -->
   <div id="boardHome" class="overlay hidden">
