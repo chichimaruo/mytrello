@@ -849,6 +849,7 @@ function relType(t) { return REL_TYPES[t] ? t : 'flow'; }
 let relsVisible = false;   // 盤面に線を出しているか
 let relDragging = false;   // カード/リストをドラッグ中（その間は線を消す）
 let relHoverId = null;     // マウスが乗っているカード（そこの線だけ濃くする）
+let relBoardRect = null;   // 盤面の矩形。線をはみ出させないために relAnchor から見る
 let relRaf = 0;
 
 // 毎回 STATE.cards を総なめしないための索引。render() と つながり編集のたびに作り直す
@@ -1149,13 +1150,31 @@ function relAnchor(a, b) {
     x1 = a.l; y1 = a.cy; x2 = b.r; y2 = b.cy;
     d = reach(x1 - x2);
     c1x = x1 - d; c1y = y1; c2x = x2 + d; c2y = y2;
-  } else {                                 // 同じ列（上下に結ぶ）
+  } else {                                 // 同じ列（＝たいてい同じリスト）
     const down = b.cy >= a.cy;
-    x1 = a.cx; y1 = down ? a.b : a.t;
-    x2 = b.cx; y2 = down ? b.t : b.b;
-    d = Math.min(Math.max(16, Math.abs(y2 - y1) * 0.4), 90);
-    c1x = x1; c1y = y1 + (down ? d : -d);
-    c2x = x2; c2y = y2 + (down ? -d : d);
+    const vgap = down ? (b.t - a.b) : (a.t - b.b);
+    if (vgap < 60) {
+      // すぐ隣のカード。まっすぐ結べばよい
+      x1 = a.cx; y1 = down ? a.b : a.t;
+      x2 = b.cx; y2 = down ? b.t : b.b;
+      d = Math.min(Math.max(16, Math.abs(y2 - y1) * 0.4), 90);
+      c1x = x1; c1y = y1 + (down ? d : -d);
+      c2x = x2; c2y = y2 + (down ? -d : d);
+    } else {
+      // 離れた2枚。まっすぐ下ろすと間のカードを縦に貫いて「変な線」に見えるので、
+      // リストの外（リストとリストの間の余白）へ逃がして回り込ませる。
+      const br = relBoardRect || { left: 0, right: window.innerWidth };
+      const listL = Math.min(a.ll, b.ll), listR = Math.max(a.lr, b.lr);
+      const goRight = (listR + 26) < (br.right - 8);   // 右に余白が無ければ左へ回す
+      const lane = goRight ? Math.min(listR + 26, br.right - 10)
+                           : Math.max(listL - 26, br.left + 10);
+      x1 = goRight ? a.r : a.l; y1 = a.cy;
+      x2 = goRight ? b.r : b.l; y2 = b.cy;
+      // 制御点をこの位置に置くと、曲線のいちばん外side が lane を通る
+      const mid = (x1 + x2) / 2;
+      const ctrl = (4 * lane - mid) / 3;
+      c1x = ctrl; c1y = y1; c2x = ctrl; c2y = y2;
+    }
   }
   const r1 = function (v) { return Math.round(v * 10) / 10; };
   return 'M' + r1(x1) + ',' + r1(y1) + ' C' + r1(c1x) + ',' + r1(c1y)
@@ -1181,6 +1200,7 @@ function relDraw() {
   layer.classList.remove('hidden');
 
   const br = board.getBoundingClientRect();
+  relBoardRect = br;
 
   // 画面に見えているカードの位置を集める（リストの中で隠れている分は描かない）
   const pos = {};
@@ -1194,7 +1214,10 @@ function relDraw() {
     const l = Math.max(r.left, br.left);
     const rt = Math.min(r.right, br.right);
     if (b - t < 8 || rt - l < 8) return;   // ほとんど見えていない
-    pos[id] = { l: r.left, r: r.right, t: t, b: b, cx: (r.left + r.right) / 2, cy: (t + b) / 2, el: n };
+    // ll/lr = このカードが入っているリストの左右。同じリスト内の回り込みで使う
+    const lrect = (n.closest('.list') || n).getBoundingClientRect();
+    pos[id] = { l: r.left, r: r.right, t: t, b: b, cx: (r.left + r.right) / 2, cy: (t + b) / 2,
+                ll: lrect.left, lr: lrect.right, el: n };
   });
 
   const edges = [];
