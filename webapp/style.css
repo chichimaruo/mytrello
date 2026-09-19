@@ -514,7 +514,15 @@
   .rel-layer .rel-dim { opacity: .12; }
   /* カードの上を通る線が読めるように、下に明るいフチを敷く */
   .rel-layer path.rel-halo { stroke: rgba(255,255,255,.85); }
-  body.rel-on .card.rel-hot { outline: 2px solid #0079bf; outline-offset: -1px; }
+  /* 触れたカードと、その相手。浮かせて目立たせる */
+  body.rel-on .card { transition: opacity .14s, filter .14s, box-shadow .14s; }
+  body.rel-on .card.rel-hot {
+    outline: 2px solid #0079bf; outline-offset: -1px;
+    box-shadow: 0 3px 12px rgba(9,30,66,.3);
+  }
+  /* 関係のないカードは沈める（薄く＋色を落とす）。クリックは普通にできる */
+  body.rel-on .card.rel-cold { opacity: .34; filter: grayscale(.6); }
+  :root.theme-dark body.rel-on .card.rel-cold { opacity: .28; }
 
   /* 線を出している間だけ、線が通る隙間をつくる（ノード図のように見せる）。
      標準の並び（リスト間12px・カード間8px）のままだと線が潰れて読めない。 */

@@ -1226,7 +1226,10 @@ function relDraw() {
   const layer = $('#relLayer');
   const board = $('#board');
   if (!layer || !board) return;
-  document.querySelectorAll('.card.rel-hot').forEach(function (n) { n.classList.remove('rel-hot'); });
+  document.querySelectorAll('.card.rel-hot, .card.rel-cold').forEach(function (n) {
+    n.classList.remove('rel-hot');
+    n.classList.remove('rel-cold');
+  });
   if (!relsVisible) { layer.innerHTML = ''; layer.classList.add('hidden'); return; }
   layer.classList.remove('hidden');
 
@@ -1295,6 +1298,16 @@ function relDraw() {
   });
   parts.push('</g>');
   layer.innerHTML = parts.join('');
+
+  // 触れたカードにつながりがあるときだけ、関係のないカードを沈める。
+  // （つながりの無いカードに触れるたびに盤面が暗くなると、ちらついて見づらい）
+  if (hot) {
+    Array.prototype.forEach.call(board.querySelectorAll('.card'), function (n) {
+      // つなぐモードの起点は、いま選んでいる当事者なので沈めない
+      if (n.classList.contains('rel-hot') || n.classList.contains('rel-origin')) return;
+      n.classList.add('rel-cold');
+    });
+  }
 }
 
 /* ---------------------- つながりマップ（全体像） ---------------------- */
