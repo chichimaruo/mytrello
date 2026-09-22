@@ -1333,19 +1333,126 @@ function relMapData(focusId) {
   return { ids: ids, cards: inBoard, edges: edges };
 }
 
-// 左から何列目に置くか＝前提をいくつ通ってきたか（一番長い道のり）
-function relMapDepth(ids, edges) {
+/* 並べ方。つながっている「かたまり」ごとに位置を決めて、棚のように敷き詰める。
+   - 流れ(⇢)や内訳(▸)があるかたまり … 前提をいくつ通ってきたかで左→右に並べる
+   - 関連(◇)だけのかたまり          … 相手がいちばん多いカードを左端にして放射状に置く
+   ぜんぶを一律に「深さ」で並べると、関連だけのボードでは全部が深さ0になり、
+   40枚が縦1列に積み上がって読めなくなる（2026-09-23 に実データで判明）。 */
+const RELMAP_MAXCOL = 6;   // 1段に並べる列数の上限
+
+function relMapLayout(ids, edges, cards) {
+  const adj = {};
+  ids.forEach(function (id) { adj[id] = []; });
+  edges.forEach(function (e) {
+    if (adj[e.from]) adj[e.from].push(e.to);
+    if (adj[e.to]) adj[e.to].push(e.from);
+  });
+
+  // かたまり（連結成分）に分ける
+  const seen = {};
+  const comps = [];
+  ids.forEach(function (id) {
+    if (seen[id]) return;
+    const stack = [id];
+    const comp = [];
+    while (stack.length) {
+      const x = stack.pop();
+      if (seen[x]) continue;
+      seen[x] = true;
+      comp.push(x);
+      adj[x].forEach(function (y) { if (!seen[y]) stack.push(y); });
+    }
+    comps.push(comp);
+  });
+
+  const listPos = {};
+  STATE.lists.forEach(function (l) { listPos[l.id] = Number(l.position) || 0; });
+  const byBoard = function (a, b) {
+    const ca = cards[a], cb = cards[b];
+    const la = listPos[ca.listId] || 0, lb = listPos[cb.listId] || 0;
+    if (la !== lb) return la - lb;
+    return (Number(ca.position) || 0) - (Number(cb.position) || 0);
+  };
+
   const depth = {};
-  ids.forEach(function (id) { depth[id] = 0; });
-  const seq = edges.filter(function (e) { return e.type !== 'rel'; });
-  for (let k = 0; k < ids.length; k++) {
-    let changed = false;
-    seq.forEach(function (e) {
-      if (depth[e.to] < depth[e.from] + 1) { depth[e.to] = depth[e.from] + 1; changed = true; }
+  const boxes = comps.map(function (comp) {
+    const inComp = {};
+    comp.forEach(function (id) { inComp[id] = true; depth[id] = 0; });
+    const seq = edges.filter(function (e) {
+      return e.type !== 'rel' && inComp[e.from] && inComp[e.to];
     });
-    if (!changed) break;
-  }
-  return depth;
+    if (seq.length) {
+      for (let k = 0; k < comp.length; k++) {
+        let changed = false;
+        seq.forEach(function (e) {
+          if (depth[e.to] < depth[e.from] + 1) { depth[e.to] = depth[e.from] + 1; changed = true; }
+        });
+        if (!changed) break;
+      }
+    } else if (comp.length > 1) {
+      // 向きが無いので、相手の多いカードを起点にした距離を列にする
+      let hub = comp[0];
+      comp.forEach(function (id) { if (adj[id].length > adj[hub].length) hub = id; });
+      const done = {};
+      done[hub] = true;
+      let front = [hub];
+      let lv = 0;
+      while (front.length) {
+        const next = [];
+        front.forEach(function (id) {
+          adj[id].forEach(function (y) {
+            if (done[y]) return;
+            done[y] = true;
+            depth[y] = lv + 1;
+            next.push(y);
+          });
+        });
+        front = next;
+        lv++;
+      }
+    }
+    const cols = {};
+    comp.forEach(function (id) { (cols[depth[id]] = cols[depth[id]] || []).push(id); });
+    const keys = Object.keys(cols).map(Number).sort(function (a, b) { return a - b; });
+    const local = {};
+    let rows = 0;
+    keys.forEach(function (d, ci) {
+      cols[d].sort(byBoard);
+      cols[d].forEach(function (id, i) { local[id] = { c: ci, r: i }; });
+      rows = Math.max(rows, cols[d].length);
+    });
+    return { ids: comp, local: local, cols: keys.length, rows: rows };
+  });
+
+  // 大きいかたまりから順に、左から詰めて はみ出たら次の段へ
+  boxes.sort(function (a, b) { return (b.cols * 100 + b.rows) - (a.cols * 100 + a.rows); });
+  const xy = {};
+  let bandTop = 0, bandLeft = 0, bandH = 0, widest = 0;
+  boxes.forEach(function (bx) {
+    if (bandLeft > 0 && bandLeft + bx.cols > RELMAP_MAXCOL) {
+      bandTop += bandH + 1;    // 段と段のあいだは1枚分あける
+      bandLeft = 0;
+      bandH = 0;
+    }
+    bx.ids.forEach(function (id) {
+      const q = bx.local[id];
+      xy[id] = {
+        x: RELMAP_PAD + (bandLeft + q.c) * (RELMAP_W + RELMAP_GX),
+        y: RELMAP_PAD + (bandTop + q.r) * (RELMAP_H + RELMAP_GY)
+      };
+    });
+    widest = Math.max(widest, bandLeft + bx.cols);
+    bandH = Math.max(bandH, bx.rows);
+    bandLeft += bx.cols;
+  });
+
+  const nRows = bandTop + bandH;
+  return {
+    xy: xy,
+    depth: depth,
+    width: RELMAP_PAD * 2 + widest * RELMAP_W + Math.max(0, widest - 1) * RELMAP_GX,
+    height: RELMAP_PAD * 2 + nRows * RELMAP_H + Math.max(0, nRows - 1) * RELMAP_GY
+  };
 }
 
 // 一番長い「流れ」の連なり＝ここが遅れると全部遅れる道すじ
@@ -1389,36 +1496,10 @@ function renderRelMap() {
     return;
   }
 
-  const depth = relMapDepth(data.ids, data.edges);
+  const lay = relMapLayout(data.ids, data.edges, data.cards);
+  const xy = lay.xy, depth = lay.depth, width = lay.width, height = lay.height;
   const showCrit = $('#relmapCrit') ? $('#relmapCrit').checked : true;
   const crit = showCrit ? relMapCritical(data.ids, data.edges, depth) : {};
-
-  // 列ごとに縦に並べる（同じ列の中はリストの並び順→カードの並び順）
-  const cols = {};
-  data.ids.forEach(function (id) { (cols[depth[id]] = cols[depth[id]] || []).push(id); });
-  const listPos = {};
-  STATE.lists.forEach(function (l) { listPos[l.id] = Number(l.position) || 0; });
-  const xy = {};
-  let maxRows = 0;
-  const colKeys = Object.keys(cols).map(Number).sort(function (a, b) { return a - b; });
-  colKeys.forEach(function (d, ci) {
-    cols[d].sort(function (a, b) {
-      const ca = data.cards[a], cb = data.cards[b];
-      const la = listPos[ca.listId] || 0, lb = listPos[cb.listId] || 0;
-      if (la !== lb) return la - lb;
-      return (Number(ca.position) || 0) - (Number(cb.position) || 0);
-    });
-    cols[d].forEach(function (id, i) {
-      xy[id] = {
-        x: RELMAP_PAD + ci * (RELMAP_W + RELMAP_GX),
-        y: RELMAP_PAD + i * (RELMAP_H + RELMAP_GY)
-      };
-    });
-    maxRows = Math.max(maxRows, cols[d].length);
-  });
-
-  const width = RELMAP_PAD * 2 + colKeys.length * RELMAP_W + Math.max(0, colKeys.length - 1) * RELMAP_GX;
-  const height = RELMAP_PAD * 2 + maxRows * RELMAP_H + Math.max(0, maxRows - 1) * RELMAP_GY;
 
   const p = [];
   p.push('<svg width="' + width + '" height="' + height + '" viewBox="0 0 ' + width + ' ' + height + '">');
