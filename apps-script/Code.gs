@@ -82,6 +82,7 @@ const API_ALLOWED = {
   addAutomation: 1, deleteAutomation: 1,
   addRecurring: 1, deleteRecurring: 1,
   getOAuthToken: 1, getAttachFolderId: 1, addAttachmentMeta: 1, deleteAttachment: 1,
+  importCards: 1, setCardPositions: 1,
   syncCalendar: 1, syncTask: 1,
   enableReminders: 1, disableReminders: 1, isReminderOn: 1, sendDueReminders: 1,
   enableBackup: 1, disableBackup: 1, backupNow: 1, backupStatus: 1,
@@ -1646,6 +1647,77 @@ function deleteAttachment(cardId, attId) {
       try { DriveApp.getFileById(target.fileId).setTrashed(true); } catch (e) {}
     }
     return true;
+  });
+}
+
+/* ========================= まとめて取り込み（レシピPDFなど） ========================= */
+
+// 複数のカードを1回のロックでまとめて作る。
+// 1枚ずつ addCard → updateCard → addAttachmentMeta と呼ぶと、1枚あたり約8秒ぶんロックを握り、
+// 並行して流すとロックのタイムアウトが出る。300枚規模の取り込み用にまとめて書く。
+//   items = [{ listId, title, desc, labels:[labelId], fields:{fieldId:値},
+//              attachments:[{id,name,mimeType,fileId,url,createdAt}], position }]
+// 同じリストに同じ題名のカードがすでにあれば作らず、そのidを返す（やり直しても二重にならない）。
+function importCards(items) {
+  return withLock_(function () {
+    const sh = getSS_().getSheetByName('Cards');
+    const have = {};     // 'listId|題名' → id
+    const maxPos = {};   // listId → 現在の最大position
+    sheetObjects_(sh).forEach(function (c) {
+      if (isTrashed_(c)) return;
+      have[c.listId + '|' + c.title] = c.id;
+      const p = Number(c.position) || 0;
+      if (maxPos[c.listId] === undefined || p > maxPos[c.listId]) maxPos[c.listId] = p;
+    });
+
+    const now = new Date().toISOString();
+    const rows = [], result = [];
+    (items || []).forEach(function (it) {
+      if (!it || !it.listId || !it.title) return;
+      const key = it.listId + '|' + it.title;
+      if (have[key]) { result.push({ title: it.title, id: have[key], created: false }); return; }
+      let pos;
+      if (it.position !== undefined && it.position !== null) {
+        pos = Number(it.position);
+      } else {
+        pos = (maxPos[it.listId] === undefined ? -1 : maxPos[it.listId]) + 1;
+        maxPos[it.listId] = pos;
+      }
+      const o = {
+        id: Utilities.getUuid(), listId: it.listId, title: it.title, desc: it.desc || '',
+        position: pos, labels: JSON.stringify(it.labels || []), due: '', checklist: '[]', comments: '[]',
+        createdAt: now, updatedAt: now, archived: false,
+        attachments: JSON.stringify(it.attachments || []), start: '', allDay: true, done: false,
+        ratings: '{}', fields: JSON.stringify(it.fields || {}), cover: '', template: false, links: '[]',
+        sync: '{}', places: '[]', deleted: false, klass: '', period: 0, embedding: '', embHash: '', rels: '[]'
+      };
+      rows.push(o);
+      have[key] = o.id;
+      result.push({ title: it.title, id: o.id, created: true });
+    });
+    appendRows_(sh, 'Cards', rows);
+    return result;
+  });
+}
+
+// カードの並び順(position)をまとめて書き換える。pairs = [[cardId, position], ...]
+// saveCardOrder は1枚ごとに列Aを読み直すので、数百枚だと遅い。ここは1回の読み書きで済ませる。
+function setCardPositions(pairs) {
+  return withLock_(function () {
+    const sh = getSS_().getSheetByName('Cards');
+    const n = sh.getLastRow() - 1;
+    if (n < 1) return 0;
+    const ids = sh.getRange(2, 1, n, 1).getValues();
+    const pos = sh.getRange(2, 5, n, 1).getValues();   // position は5列目（SCHEMA.Cards の並びと一致）
+    const want = {};
+    (pairs || []).forEach(function (p) { want[p[0]] = Number(p[1]); });
+    let changed = 0;
+    for (let i = 0; i < n; i++) {
+      const id = ids[i][0];
+      if (want[id] !== undefined) { pos[i][0] = want[id]; changed++; }
+    }
+    if (changed) sh.getRange(2, 5, n, 1).setValues(pos);
+    return changed;
   });
 }
 

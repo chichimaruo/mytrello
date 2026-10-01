@@ -244,6 +244,7 @@ UIは画面下部の各 `#overlay`（boardHome, calendar, table, dashboard, time
 - **List**: addList, renameList, deleteList, saveListOrder, archiveList, setListWip, setListCollapsed, setAllListsCollapsed, copyList, archiveAllCards
 - **Card**: addCard, updateCard, deleteCard, saveCardOrder, moveCard, moveCardToList, copyCard
 - **添付**: getOAuthToken, getAttachFolderId, addAttachmentMeta, deleteAttachment, uploadAttachment(旧base64・予備), trashAttachmentsJson_
+- **まとめて取り込み（v3.17・2026-10-01）**: `importCards(items)`＝複数カードを1回のロックで作る（同じリストに同題名があれば作らずidを返す＝やり直しても二重にならない）／`setCardPositions([[id, position],...])`＝並び順を1回の読み書きで更新（`saveCardOrder` は1枚ごとに列Aを読み直すので数百枚だと遅い）
 - **Label/Field/View/Automation/Recurring**: add/delete系（CRUD）。runRecurring（トリガー）
 - **リマインダー**: enableReminders/disableReminders/isReminderOn/sendDueReminders
 - **共有**: isSharingEnabled/enableSharing/disableSharing/getAppUrl/renderSharedBoard_
@@ -364,6 +365,45 @@ call('updateCard', [cardId, {'fields': {...}}])
   HTMLからJSONを取り出すので、そのまま使える。
 - PowerShell の `ConvertFrom-Json` は**大きな応答を扱えない**（`getAllCards` は約170KB＝解析不能）。
   調査は必ず Python 側でやること。
+- **【2026-10-01 修正】応答の先頭にBOM(`\ufeff`)が付くと最初の `json.loads` が失敗し、予備経路（HTMLのタグ除去）に落ちて、
+  カード本文中の `<…>` を「タグ」と誤認して途中を削っていた**。小さい応答では気づけず、カードが増えて本文に `<` が混ざると
+  「`getAllCards` が199枚しか返さない（実際は503枚）」のように件数が合わなくなる。`_parse` の先頭で BOM を落とすようにした。
+  件数が合わないときは、まず `healthCheck` の `counts`（サーバー側の集計）と突き合わせること。
+- **書き込みは再試行しない**（`call(..., tries=1)`）。`call` の既定は通信エラーで4回まで再試行するので、
+  `addCard` のように冪等でない関数に使うと二重登録の恐れがある。冪等にしたいときは、サーバー側で重複を弾く（`importCards` 参照）。
+
+---
+
+## 10.8 レシピPDFをまとめて取り込む（2026-10-01 実施・ボード「つづりさレシピ」）
+
+`G:\マイドライブ\共有フォルダ\（共有元の名前）\tsuzurisa`（料理教室資料のPDF **334本**）を、**351枚のカード**として新ボード
+**「つづりさレシピ」**へ入れた。道具一式は **`tools\tsuzurisa_import\`** に保存（公開リポジトリには載らない）。
+
+**カードの形**: 題名／リスト（今のレシピボードと同じ分類＋「調味料」「作り置き」「資料」）／ラベル＝料理ジャンル1つ＋「つづりさ」／
+カスタムフィールド「教室の月」（例 `2022-12`）／本文＝材料→作り方→出典（元のPDFのファイル名つき）／完成写真を**添付**（カバーにはしていない）。
+原本PDFへのリンクは作っていない（Googleドライブのコネクタから `G:` が見えず、ファイルIDが取れないため）。
+**原本PDFを「添付」にしてはいけない**（添付を外す／カードを消すとDriveの実ファイルもゴミ箱へ送る作りのため）。
+
+**進め方（再現用）**
+1. `build_items.py` … 全PDFを座標つきで解析して `items.json` へ。**PDFの文字は取れるが、手順の順番がバラバラ**に出るので、
+   `pdf_parse2.py` が座標（番号の位置・左右2列）で並べ直す。検査（文字の回収率・番号の連続・空の手順）を自動で行い、
+   **334本中304本(91%)は全部クリア**、残り30本は複数レシピ・別書式で手仕上げ。
+2. `classify.py` … 題名と材料から「リスト」「ジャンル」を決める（`OVERRIDES` に手で決めた例外）。
+3. `make_entries.py` → `bulk_import.py` … 画像を並行してDriveへ上げ、`importCards` で20枚ずつ作る。
+4. 手仕上げ分は `manual_specs.txt` / `manual_specs2.txt`（簡易記法）→ `manual_build.py` → `run_manual.py`。
+5. `finish_order.py`（並び順・リスト順）、`verify_board.py`（重複・欠け・写真の実体まで検証）。
+
+**はまった所**
+- **1枚ずつ `addCard`→`updateCard`→`addAttachmentMeta` を並行で流すと、ロックのタイムアウトで逆に詰まる**。1枚あたり約8秒ぶん
+  サーバーがロックを握るため、4並行だと待ち行列が20秒（`waitLock`）を超える。→ `importCards` を足して20枚ずつ一括にした（全294枚が数分）。
+- **`_mt.py` のBOM不具合**（§10.6）。カードが増えてから「件数が合わない」で発覚。
+- **写真のしきい値**: 古い書式は縦長で約100×140pt、横長の細い帯（高さ約80pt）の写真もある。「高さ90pt以上」だと取りこぼす。
+  帯が縦に2枚重なって1枚の写真になっているものは、合体して描画する。
+- 複数画像のPDFの**表紙の画像はロゴ/QRのことがある**（入江シェフの資料）。必ず目で確認してから付ける。
+- 月ごとのまとめPDF（10・11・12月）は**1ページ=1レシピの4品**だったので、ページ単位で別カードにした。
+- 「Spoon and Smile」のPDFには**「無断転載・複製ご遠慮ください」の表示**がある。個人の備忘録としてのみ使い、カード本文にも注記を入れた。
+  **このボードは共有リンク（読み取り専用）機能を使わないこと。**
+- 重さ: 新ボードの初回読み込みは約750KB（今のレシピボードは約250KB）。全ボード横断の画面（カレンダー等）は約1MBになった。
 
 ---
 
