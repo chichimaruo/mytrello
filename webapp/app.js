@@ -586,7 +586,7 @@ function normalizeCard(c) {
 
 // テキストエリアを中身の量に合わせて自動で高さ調整（中スクロールをなくす）
 function autoGrow(t) {
-  if (!t) return;
+  if (!t || t.offsetParent === null) return; // 非表示中は測れない（高さ2pxになってしまう）ので何もしない
   t.style.height = 'auto';
   t.style.height = (t.scrollHeight + 2) + 'px';
 }
@@ -2276,6 +2276,7 @@ function openModal(cardId) {
   renderModal();
   $('#modal').classList.remove('hidden');
   autoGrow($('#m-desc')); // 表示後に高さを中身へ合わせる
+  requestAnimationFrame(function () { autoGrow($('#m-desc')); }); // スマホでレイアウト確定後にもう一度
 }
 function closeModal() {
   openCardId = null;
@@ -2316,7 +2317,10 @@ function renderModal() {
   if (!card) return;
 
   $('#m-title').value = card.title;
-  $('#m-desc').value = card.desc || '';
+  if ($('#m-desc').value !== (card.desc || '')) {
+    $('#m-desc').value = card.desc || '';
+    autoGrow($('#m-desc')); // 開いたまま更新されたときも高さを中身に合わせる（文字切れ防止）
+  }
   $('#m-start').value = card.start || '';
   $('#m-end').value = card.due || '';
   $('#m-allday').checked = card.allDay !== false;
@@ -4044,6 +4048,7 @@ function toggleDescPreview() {
   const showing = !box.classList.contains('hidden');
   if (showing) {
     box.classList.add('hidden'); ta.classList.remove('hidden');
+    autoGrow(ta);
     btn.textContent = '👁 プレビュー';
     ta.focus();
   } else {
@@ -4648,6 +4653,7 @@ function bindUI() {
     relDrawSoon();
   });
   window.addEventListener('resize', relDrawSoon);
+  window.addEventListener('resize', function () { if (openCardId) autoGrow($('#m-desc')); }); // 画面の向き・幅が変わったら測り直す
   $('#board').addEventListener('mouseover', function (e) {
     if (!relsVisible) return;
     const n = e.target.closest ? e.target.closest('.card') : null;
