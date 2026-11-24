@@ -584,6 +584,72 @@ function normalizeCard(c) {
   return c;
 }
 
+/* ---------------- カード内リンク：説明に [[カード名]] と書くと、そのカードへ飛べる ---------------- */
+// 飲み物のペアリング → レシピボードのカード、のようにボードをまたいで飛べる。
+// 名前で探すので、相手のカード名を変えたら [[ ]] の中も直す。
+let jumpBackCardId = null;   // 飛んだ先から「元のカードに戻る」ため
+function descCardLinkTitles(text) {
+  const out = [], seen = {};
+  const re = /\[\[([^\[\]\n]{1,120})\]\]/g;
+  let m;
+  while ((m = re.exec(String(text || '')))) {
+    const t = m[1].trim();
+    if (t && !seen[t]) { seen[t] = true; out.push(t); }
+  }
+  return out;
+}
+function findCardByTitle(t) {
+  const live = STATE.cards.filter(function (c) { return !c.archived && !c.deleted; });
+  return live.find(function (c) { return c.title === t; })
+      || live.find(function (c) { return String(c.title || '').indexOf(t) >= 0; }) || null;
+}
+function renderDescCardLinks() {
+  const box = $('#m-desc-cardlinks');
+  if (!box) return;
+  const titles = descCardLinkTitles($('#m-desc').value);
+  box.innerHTML = '';
+  if (jumpBackCardId && jumpBackCardId !== openCardId) {
+    const prev = STATE.cards.find(function (c) { return c.id === jumpBackCardId; });
+    const b = el('button', 'card-jump back');
+    b.type = 'button'; b.dataset.jumpBack = jumpBackCardId;
+    b.textContent = '↩ ' + (prev ? prev.title : '元のカード') + ' に戻る';
+    box.appendChild(b);
+  }
+  titles.forEach(function (t) {
+    const b = el('button', 'card-jump');
+    b.type = 'button'; b.dataset.jump = t;
+    b.textContent = '🔗 ' + t;
+    box.appendChild(b);
+  });
+  box.classList.toggle('hidden', !box.children.length);
+}
+async function jumpToCardTitle(t) {
+  let c = findCardByTitle(t);
+  if (!c) {              // 起動直後は今のボードのカードしか読んでいないので、全部読んでから探す
+    setStatus('探しています...');
+    try { await ensureAllCards(); } catch (e) {}
+    c = findCardByTitle(t);
+  }
+  if (!c) { setStatus('「' + t + '」というカードが見つかりません'); return; }
+  setStatus('');
+  jumpToCard(c.id, false);
+}
+async function jumpToCard(id, isBack) {
+  const from = openCardId;
+  let c = STATE.cards.find(function (x) { return x.id === id; });
+  if (!c) { try { await ensureAllCards(); } catch (e) {} c = STATE.cards.find(function (x) { return x.id === id; }); }
+  if (!c) { setStatus('カードが見つかりません'); return; }
+  const list = STATE.lists.find(function (l) { return l.id === c.listId; });
+  const bid = list && list.boardId;
+  closeModal();
+  if (bid && bid !== currentBoardId) {
+    try { await ensureAllCards(); } catch (e) {}   // 切り替え先のボードのカードも揃えておく
+    currentBoardId = bid; saveCurrentBoard(bid); hideHome(); render();
+  }
+  jumpBackCardId = isBack ? null : from;
+  openModal(c.id);
+}
+
 // テキストエリアを中身の量に合わせて自動で高さ調整（中スクロールをなくす）
 function autoGrow(t) {
   if (!t || t.offsetParent === null) return; // 非表示中は測れない（高さ2pxになってしまう）ので何もしない
@@ -2279,6 +2345,7 @@ function openModal(cardId) {
   requestAnimationFrame(function () { autoGrow($('#m-desc')); }); // スマホでレイアウト確定後にもう一度
 }
 function closeModal() {
+  jumpBackCardId = null;
   openCardId = null;
   saveOpenCard(null);
   $('#modal').classList.add('hidden');
@@ -2321,6 +2388,7 @@ function renderModal() {
     $('#m-desc').value = card.desc || '';
     autoGrow($('#m-desc')); // 開いたまま更新されたときも高さを中身に合わせる（文字切れ防止）
   }
+  renderDescCardLinks();
   $('#m-start').value = card.start || '';
   $('#m-end').value = card.due || '';
   $('#m-allday').checked = card.allDay !== false;
@@ -4007,6 +4075,10 @@ function renderMarkdown(src) {
 
   function inline(t) {
     return esc(t)
+      // [[カード名]] → そのカードへ飛ぶリンク（別ボードのカードでもOK）
+      .replace(/\[\[([^\[\]\n]{1,120})\]\]/g, function (_, name) {
+        return '<a href="#" class="card-jump-inline" data-jump="' + name.trim().replace(/"/g, '&quot;') + '">🔗 ' + name.trim() + '</a>';
+      })
       .replace(/`([^`]+)`/g, '<code>$1</code>')
       .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
       .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>')
@@ -4995,7 +5067,18 @@ function bindUI() {
   $('#m-desc').addEventListener('change', function () {
     saveField({ desc: $('#m-desc').value });
   });
-  $('#m-desc').addEventListener('input', function () { autoGrow(this); });
+  $('#m-desc').addEventListener('input', function () { autoGrow(this); renderDescCardLinks(); });
+  $('#m-desc-cardlinks').addEventListener('click', function (e) {
+    const b = e.target.closest('[data-jump],[data-jump-back]');
+    if (!b) return;
+    if (b.dataset.jumpBack) jumpToCard(b.dataset.jumpBack, true); else jumpToCardTitle(b.dataset.jump);
+  });
+  $('#m-desc-rendered').addEventListener('click', function (e) {
+    const a = e.target.closest('a[data-jump]');
+    if (!a) return;
+    e.preventDefault();
+    jumpToCardTitle(a.dataset.jump);
+  });
   $('#m-start').addEventListener('change', function () {
     saveField({ start: $('#m-start').value });
   });
