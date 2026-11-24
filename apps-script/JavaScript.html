@@ -2312,6 +2312,8 @@ function openModal(cardId) {
   $('#modal').classList.remove('hidden');
   autoGrow($('#m-desc')); // 表示後に高さを中身へ合わせる
   requestAnimationFrame(function () { autoGrow($('#m-desc')); }); // スマホでレイアウト確定後にもう一度
+  // [[カード名]] のリンクがあるカードは、最初から表示モードで開く（本文の中のリンクをそのままタップできるように）
+  if (descCardLinkTitles($('#m-desc').value).length) toggleDescPreview();
 }
 function closeModal() {
   jumpBackCardId = null;
@@ -2358,6 +2360,11 @@ function renderModal() {
     autoGrow($('#m-desc')); // 開いたまま更新されたときも高さを中身に合わせる（文字切れ防止）
   }
   renderDescCardLinks();
+  // 表示モードのまま中身が更新されたら、表示も作り直す
+  const mdBox = $('#m-desc-rendered');
+  if (mdBox && !mdBox.classList.contains('hidden')) {
+    mdBox.innerHTML = $('#m-desc').value.trim() ? renderMarkdown($('#m-desc').value) : '<span class="set-note">（説明は空です）</span>';
+  }
   $('#m-start').value = card.start || '';
   $('#m-end').value = card.due || '';
   $('#m-allday').checked = card.allDay !== false;
